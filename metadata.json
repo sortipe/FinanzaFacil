@@ -1,0 +1,7 @@
+{
+  "name": "FinanzaFacil",
+  "description": "Aplicación para gestión de gastos con roles de Usuario, Contador y Administrador. Integración con IA para lectura de recibos y pagos via Yape.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

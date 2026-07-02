@@ -1,0 +1,70 @@
+
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FinanzaFacil - Gestión Contable</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Shim para process.env requerido por el SDK de Google y Recharts
+      window.process = { 
+        env: { 
+          NODE_ENV: 'production',
+          API_KEY: '' 
+        } 
+      };
+
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                50: '#fff8e1',
+                100: '#ffecb3',
+                500: '#ffb300',
+                600: '#fb8c00',
+                700: '#f57c00',
+                900: '#e65100',
+              }
+            },
+            animation: {
+              'fade-in-up': 'fadeInUp 0.5s ease-out forwards',
+              'fade-in': 'fadeIn 0.3s ease-out forwards',
+            },
+            keyframes: {
+              fadeInUp: {
+                '0%': { opacity: '0', transform: 'translateY(10px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              },
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.3.1",
+        "react-dom": "https://esm.sh/react-dom@18.3.1",
+        "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+        "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom",
+        "lucide-react": "https://esm.sh/lucide-react@0.463.0?external=react",
+        "@google/genai": "https://esm.sh/@google/genai@1.33.0",
+        "react/": "https://esm.sh/react@18.3.1/",
+        "react-dom/": "https://esm.sh/react-dom@18.3.1/"
+      }
+    }
+    </script>
+  <link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-gray-50 text-gray-900 selection:bg-brand-100 selection:text-brand-900">
+    <div id="root"></div>
+    <script type="module" src="index.tsx"></script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
