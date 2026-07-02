@@ -1,17 +1,35 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Shield, Key, FileCode, CheckCircle, AlertCircle, Upload } from 'lucide-react';
 
+
+const getInitialFormData = (user: any) => ({
+    ruc: user?.ruc || '',
+    solUser: user?.solUser || user?.user || '',
+    solPass: user?.solPass || user?.pass || '',
+    emitterName: user?.businessName || '',
+    certPass: user?.certPass || '',
+    sunatEnv: user?.sunatEnv || (user?.sunatApiUrl?.includes('localhost') ? 'BETA' : 'PRODUCTION')
+});
+
 export const SunatSettings: React.FC = () => {
     const { currentUser, updateUser } = useStore();
-    const [formData, setFormData] = useState({
-        ruc: currentUser?.ruc || '',
-        solUser: currentUser?.solUser || '',
-        solPass: currentUser?.solPass || '',
-        emitterName: currentUser?.businessName || '',
-        certPass: currentUser?.certPass || '',
-        sunatEnv: currentUser?.sunatEnv || (currentUser?.sunatApiUrl?.includes('localhost') ? 'BETA' : 'PRODUCTION')
-    });
+    const [formData, setFormData] = useState(getInitialFormData(currentUser));
+
+    // Sincronizar formData cuando currentUser cambia (ej: después de guardar)
+    useEffect(() => {
+        setFormData(getInitialFormData(currentUser));
+    }, [currentUser]);
+
+    // Migrar datos viejos (user/pass → solUser/solPass) al cargar el usuario
+    useEffect(() => {
+        if (currentUser && (currentUser as any).user && !currentUser.solUser) {
+            updateUser(currentUser.id, {
+                solUser: (currentUser as any).user,
+                solPass: (currentUser as any).pass
+            });
+        }
+    }, [currentUser]);
 
 
     const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
@@ -37,21 +55,23 @@ export const SunatSettings: React.FC = () => {
         setStatus('saving');
         setErrorMsg(null);
 
-        const credentials = {
-            ruc: formData.ruc,
-            user: formData.solUser,
-            pass: formData.solPass,
-            certBase64: tempCertBase64,
-            certPass: formData.certPass,
-            env: formData.sunatEnv
-        };
-
         try {
-            // 1. Verificar con el servidor
+            // 1. Verificar con el servidor (usa user/pass que espera el engine)
+            const serverPayload = {
+                credentials: {
+                    ruc: formData.ruc,
+                    user: formData.solUser,
+                    pass: formData.solPass,
+                    certBase64: tempCertBase64,
+                    certPass: formData.certPass,
+                    env: formData.sunatEnv
+                }
+            };
+
             const response = await fetch('http://localhost:5555/verificar-conexion', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ credentials })
+                body: JSON.stringify(serverPayload)
             });
 
             const result = await response.json();
@@ -60,12 +80,16 @@ export const SunatSettings: React.FC = () => {
                 throw new Error(result.error || 'No se pudo conectar con SUNAT');
             }
 
-            // 2. Si es exitoso, guardar en el contexto/localstorage
+            // 2. Si es exitoso, guardar con los nombres que lee el formulario (solUser/solPass)
             updateUser(currentUser!.id, {
-                ...credentials,
+                ruc: formData.ruc,
+                solUser: formData.solUser,
+                solPass: formData.solPass,
+                certBase64: tempCertBase64,
+                certPass: formData.certPass,
+                sunatEnv: formData.sunatEnv,
                 businessName: formData.emitterName,
-                sunatApiUrl: 'http://localhost:5555',
-                sunatEnv: formData.sunatEnv
+                sunatApiUrl: 'http://localhost:5555'
             });
             
             setStatus('success');

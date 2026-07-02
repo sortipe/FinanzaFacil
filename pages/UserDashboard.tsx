@@ -242,7 +242,7 @@ export const UserDashboard: React.FC = () => {
     setSyncError('');
     const activeToken = currentUser?.sunatToken || sunatGlobalConfig.sunatToken;
     
-    if (!currentUser?.user || !currentUser?.pass) {
+    if (!currentUser?.solUser || !currentUser?.solPass) {
       setSyncError("Credenciales SOL (usuario y contraseña) no configuradas en tu cuenta.");
       return;
     }
@@ -261,8 +261,8 @@ export const UserDashboard: React.FC = () => {
         currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || 'http://localhost:5555',
         {
           ruc: currentUser?.ruc,
-          user: currentUser?.user,
-          pass: currentUser?.pass,
+          user: currentUser?.solUser,
+          pass: currentUser?.solPass,
           certBase64: currentUser?.certBase64,
           certPass: currentUser?.certPass,
           emitterName: currentUser?.businessName,
@@ -291,7 +291,7 @@ export const UserDashboard: React.FC = () => {
     setSyncError('');
     const activeToken = currentUser?.sunatToken || sunatGlobalConfig.sunatToken;
 
-    if (!currentUser?.user || !currentUser?.pass) {
+    if (!currentUser?.solUser || !currentUser?.solPass) {
       setSyncError("Credenciales SOL (usuario y contraseña) no configuradas en tu cuenta.");
       return;
     }
@@ -322,8 +322,8 @@ export const UserDashboard: React.FC = () => {
         currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || 'http://localhost:5555',
         {
           ruc: currentUser?.ruc,
-          user: currentUser?.user,
-          pass: currentUser?.pass,
+          user: currentUser?.solUser,
+          pass: currentUser?.solPass,
           certBase64: currentUser?.certBase64,
           certPass: currentUser?.certPass,
           emitterName: currentUser?.businessName,
