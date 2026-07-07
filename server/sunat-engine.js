@@ -29,8 +29,13 @@ class SunatEngine {
             })
             .com(`Generado por FinanzaFacil Motor Directo v5.2 - ${new Date().toLocaleString()}`);
 
-        // La firma se insertará dinámicamente en signXml
-
+        // Placeholder para la firma digital (se reemplaza en signXml)
+        doc.ele('ext:UBLExtensions')
+            .ele('ext:UBLExtension')
+                .ele('ext:ExtensionContent')
+                .up()
+            .up()
+        .up();
 
         // 2. Información de Cabecera (Obligatorio en este orden)
         doc.ele('cbc:UBLVersionID').txt('2.1').up()
@@ -38,7 +43,7 @@ class SunatEngine {
            .ele('cbc:ID').txt(data.id).up()
            .ele('cbc:IssueDate').txt(data.issueDate).up()
            .ele('cbc:IssueTime').txt(data.issueTime || '00:00:00').up()
-           .ele('cbc:InvoiceTypeCode', { listID: '0101' }).txt('01').up()
+           .ele('cbc:InvoiceTypeCode', { listID: '0101' }).txt(data.id?.startsWith('B') ? '03' : '01').up()
            .ele('cbc:DocumentCurrencyCode').txt(data.currency || 'PEN').up();
 
         const invoice = doc;
@@ -80,21 +85,12 @@ class SunatEngine {
                     .up()
                 .up()
             .up();
-        // 3. Forma de Pago
+        // 3. Forma de Pago (siempre Contado)
         invoice.ele('cac:PaymentTerms')
                 .ele('cbc:ID').txt('FormaPago').up()
-                .ele('cbc:PaymentMeansID').txt(data.paymentType === 'CREDITO' ? 'Credito' : 'Contado').up()
+                .ele('cbc:PaymentMeansID').txt('Contado').up()
                 .ele('cbc:Amount', { currencyID: data.currency || 'PEN' }).txt(data.total).up()
         .up();
-
-        if (data.paymentType === 'CREDITO') {
-            invoice.ele('cac:PaymentTerms')
-                .ele('cbc:ID').txt('FormaPago').up()
-                .ele('cbc:PaymentMeansID').txt('Cuota001').up()
-                .ele('cbc:Amount', { currencyID: data.currency || 'PEN' }).txt(data.total).up()
-                .ele('cbc:PaymentDueDate').txt(data.issueDate).up() // Por defecto hoy, el usuario puede cambiarlo luego
-            .up();
-        }
 
 
         // Cálculo de impuestos (Asumiendo 18% IGV incluido en el total para este ejemplo)
@@ -116,16 +112,6 @@ class SunatEngine {
                 .up()
             .up()
         .up();
-
-        if (data.hasDetraction) {
-            const detractionAmount = (total * (data.detractionPercent || 10)) / 100;
-            invoice.ele('cac:PaymentTerms')
-                .ele('cbc:ID').txt('Detraccion').up()
-                .ele('cbc:PaymentMeansID').txt(data.detractionCode || '001').up()
-                .ele('cbc:Percent').txt(data.detractionPercent || '10').up()
-                .ele('cbc:Amount', { currencyID: 'PEN' }).txt(detractionAmount.toFixed(2)).up()
-            .up();
-        }
 
         doc.ele('cac:LegalMonetaryTotal')
             .ele('cbc:LineExtensionAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
@@ -223,7 +209,8 @@ class SunatEngine {
         sig.addReference(
             "//*[local-name(.)='Invoice']", 
             ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/2001/10/xml-exc-c14n#"], 
-            "http://www.w3.org/2001/04/xmlenc#sha256"
+            "http://www.w3.org/2001/04/xmlenc#sha256",
+            "", null, null, true
         );
         
         sig.signingKey = privateKey;
@@ -236,12 +223,11 @@ class SunatEngine {
             signatureXml = signatureXml.replace('<ds:Signature', '<ds:Signature Id="SignatureSUNAT"');
         }
         
-        // Construir el bloque de extensiones UBL
-        const extensionsXml = `<ext:UBLExtensions><ext:UBLExtension><ext:ExtensionContent>${signatureXml}</ext:ExtensionContent></ext:UBLExtension></ext:UBLExtensions>`;
-        
-        // Insertar las extensiones como primer hijo del nodo Invoice
-        // Buscamos el final de la etiqueta de apertura <Invoice ... >
-        return xmlString.replace(/(<Invoice[^>]*>)/, `$1${extensionsXml}`);
+        // Reemplazar el placeholder <ext:ExtensionContent/> con la firma
+        return xmlString.replace(
+            '<ext:ExtensionContent/>',
+            `<ext:ExtensionContent>${signatureXml}</ext:ExtensionContent>`
+        );
     }
 
 
@@ -288,6 +274,56 @@ class SunatEngine {
         });
 
         return response.data;
+    }
+
+    /**
+     * Consulta el estado de un CPE directamente con SUNAT (ConsultaCPE)
+     */
+    async consultarCPE(ruc, tipo, serie, numero, dynamicConfig) {
+        const conf = dynamicConfig || this.config;
+        const soapEnvelope = `
+            <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="http://service.sunat.gob.pe" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+                <soapenv:Header>
+                    <wsse:Security>
+                        <wsse:UsernameToken>
+                            <wsse:Username>${conf.ruc}${conf.user}</wsse:Username>
+                            <wsse:Password>${conf.pass}</wsse:Password>
+                        </wsse:UsernameToken>
+                    </wsse:Security>
+                </soapenv:Header>
+                <soapenv:Body>
+                    <ser:getStatus>
+                        <rucComprobante>${ruc}</rucComprobante>
+                        <tipoComprobante>${tipo}</tipoComprobante>
+                        <serieComprobante>${serie}</serieComprobante>
+                        <numeroComprobante>${numero}</numeroComprobante>
+                    </ser:getStatus>
+                </soapenv:Body>
+            </soapenv:Envelope>
+        `;
+
+        const url = conf.env === 'PRODUCTION'
+            ? 'https://e-factura.sunat.gob.pe/ol-it-wsconscpegem/billConsultService'
+            : 'https://e-beta.sunat.gob.pe/ol-it-wsconscpegem-beta/billConsultService';
+
+        const response = await axios.post(url, soapEnvelope, {
+            headers: {
+                'Content-Type': 'text/xml;charset=utf-8',
+                'SOAPAction': 'urn:getStatus'
+            }
+        });
+
+        const data = response.data;
+        const statusCode = data.match(/<cbc:ResponseCode[^>]*>([^<]+)<\/cbc:ResponseCode>/)?.[1] || '';
+        const description = data.match(/<cbc:Description[^>]*>([^<]+)<\/cbc:Description>/)?.[1] || '';
+        const sunatResponse = data.match(/<ser:getStatusResponse[^>]*>([\s\S]*?)<\/ser:getStatusResponse>/)?.[1] || '';
+
+        return {
+            success: !data.includes('<soap-env:Fault') && !data.includes('<soap:Fault'),
+            statusCode,
+            description,
+            raw: data
+        };
     }
 }
 

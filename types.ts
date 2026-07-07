@@ -33,6 +33,8 @@ export interface User {
   sunatApiUrl?: string; // Para alternar entre Sandbox y Producción
   certBase64?: string; // Certificado PFX en Base64
   certPass?: string;   // Contraseña del certificado
+  serieFactura?: string; // Serie para facturas (ej: F001)
+  serieBoleta?: string;  // Serie para boletas (ej: B001)
 }
 
 export interface TaxDocument {
@@ -45,7 +47,7 @@ export interface TaxDocument {
   uploadDate: string;
   periodMonth: string;
   periodYear: number;
-  sunatStatus?: 'PENDING' | 'SENT' | 'REJECTED';
+  sunatStatus?: 'PENDING' | 'SENT' | 'REJECTED' | 'INTERNO';
   sunatHash?: string;
   pdfUrl?: string;
   xmlUrl?: string;
@@ -62,6 +64,14 @@ export interface TaxDocument {
     netAmount: number;
     date: string;
   };
+}
+
+export interface InvoiceItem {
+  quantity: number;
+  unit: string;
+  description: string;
+  unitPrice: number;
+  total: number;
 }
 
 export interface Expense {

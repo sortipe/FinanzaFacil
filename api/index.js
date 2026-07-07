@@ -78,7 +78,8 @@ app.post('/api/emitir-factura', async (req, res) => {
         const xml = engine.buildInvoiceXml(invoiceData);
         const signedXml = await engine.signXml(xml, currentConfig.certData, currentConfig.certPass);
         
-        const fileName = `${currentConfig.ruc}-01-${invoiceData.id}`;
+        const tipoDoc = invoiceData.id?.startsWith('B') ? '03' : '01';
+        const fileName = `${currentConfig.ruc}-${tipoDoc}-${invoiceData.id}`;
         const response = await engine.sendToSunat(fileName, signedXml, currentConfig);
         
         let cdrBase64 = null;

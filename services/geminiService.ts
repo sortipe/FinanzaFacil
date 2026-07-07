@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+const API_URL = 'http://localhost:5555';
 
 // Helper to convert file to base64
 export const fileToBase64 = (file: File): Promise<string> => {
@@ -27,51 +27,15 @@ export interface ReceiptData {
   igv?: number;
 }
 
-// Corrected model name to 'gemini-3-flash-preview' and ensured SDK initialization follows guidelines
 export const analyzeReceipt = async (base64Image: string, mimeType: string): Promise<ReceiptData> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType,
-              data: base64Image
-            }
-          },
-          {
-            text: "Analiza este recibo peruano (Factura o Boleta). Extrae: 1. Total (número), 2. Fecha (YYYY-MM-DD), 3. Nombre del comercio (Razón Social), 4. RUC del emisor (11 dígitos), 5. Número de comprobante (serie y número, ej: F001-000123), 6. Subtotal (base imponible), 7. IGV (18%), 8. Categoría (Alimentación, Transporte, Servicios, Ocio, Salud, Otros)."
-          }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            total: { type: Type.NUMBER },
-            date: { type: Type.STRING },
-            merchant: { type: Type.STRING },
-            ruc: { type: Type.STRING },
-            invoiceNumber: { type: Type.STRING },
-            subtotal: { type: Type.NUMBER },
-            igv: { type: Type.NUMBER },
-            category: { type: Type.STRING }
-          },
-          required: ["total", "date", "merchant", "category"]
-        }
-      }
-    });
-
-    if (response.text) {
-      return JSON.parse(response.text) as ReceiptData;
-    }
-    throw new Error("No response text from Gemini");
-  } catch (error) {
-    console.error("Gemini Error:", error);
-    throw error;
+  const response = await fetch(`${API_URL}/analizar-recibo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base64Image, mimeType })
+  });
+  const result = await response.json();
+  if (result.success && result.data) {
+    return result.data as ReceiptData;
   }
+  throw new Error(result.error || 'Error al analizar el recibo');
 };
