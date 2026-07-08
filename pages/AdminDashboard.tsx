@@ -22,7 +22,8 @@ export const AdminDashboard: React.FC = () => {
     sunatGlobalConfig,
     updateSunatGlobalConfig,
     complaints,
-    updateComplaintStatus
+    updateComplaintStatus,
+    generatePassword
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'complaints'>('users');
@@ -60,6 +61,7 @@ export const AdminDashboard: React.FC = () => {
     solUser: '',
     solPass: ''
   });
+  const [generatedPassword, setGeneratedPassword] = useState('');
 
   const handleEditPackage = (pkg: any) => {
     setEditingPackageId(pkg.id);
@@ -120,6 +122,8 @@ export const AdminDashboard: React.FC = () => {
 
   const handleOpenCreateUser = () => {
     setEditingUser(null);
+    const pwd = generatePassword();
+    setGeneratedPassword(pwd);
     setUserFormData({
       name: '', email: '', role: UserRole.USER, subscriptionStatus: SubscriptionStatus.PENDING,
       assignedAccountantId: '', ruc: '', dni: '', businessName: '', taxAddress: '',
@@ -130,6 +134,7 @@ export const AdminDashboard: React.FC = () => {
 
   const handleOpenEditUser = (user: User) => {
     setEditingUser(user);
+    setGeneratedPassword('');
     setUserFormData({
       name: user.name, email: user.email, role: user.role,
       subscriptionStatus: user.subscriptionStatus || SubscriptionStatus.PENDING,
@@ -142,21 +147,34 @@ export const AdminDashboard: React.FC = () => {
     setShowUserModal(true);
   };
 
-  const handleSaveUser = (e: React.FormEvent) => {
+  const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingUser) {
       updateUser(editingUser.id, userFormData);
     } else {
-      registerUser({
+      const pwd = generatedPassword || generatePassword();
+      const newUser = {
         id: Date.now().toString(),
         ...userFormData,
-        password: '123'
-      });
+        password: pwd,
+        mustChangePassword: true
+      };
+      registerUser(newUser);
+      fetch('http://localhost:5555/api/send-welcome-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: newUser.email, name: newUser.name, password: pwd })
+      }).catch(() => {});
     }
     setShowUserModal(false);
   };
 
   const accountants = users.filter(u => u.role === UserRole.ACCOUNTANT);
+  const getAccountantName = (id?: string) => {
+    if (!id) return '—';
+    const acc = accountants.find(a => a.id === id);
+    return acc ? acc.name : '—';
+  };
   const unreadCount = notifications.length;
 
   return (
@@ -232,6 +250,7 @@ export const AdminDashboard: React.FC = () => {
                   <tr>
                     <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Identidad</th>
                     <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Rol / Perfil</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Contador</th>
                     <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Estado Suscripción</th>
                     <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest text-right">Acciones</th>
                   </tr>
@@ -254,6 +273,11 @@ export const AdminDashboard: React.FC = () => {
                       <td className="px-6 py-4">
                         <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase ${user.role === UserRole.ADMIN ? 'bg-purple-100 text-purple-700' : user.role === UserRole.ACCOUNTANT ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'}`}>
                           {user.role}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="text-[10px] font-bold text-gray-600">
+                          {user.role === UserRole.USER ? getAccountantName(user.assignedAccountantId) : '—'}
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -560,6 +584,21 @@ export const AdminDashboard: React.FC = () => {
                       <div>
                         <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Clave SOL</label>
                         <input type="password" placeholder="********" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={userFormData.solPass} onChange={e => setUserFormData({...userFormData, solPass: e.target.value})} />
+                      </div>
+                      {!editingUser && (
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Contraseña Generada</label>
+                          <input type="password" readOnly value={generatedPassword} className="w-full border-2 border-gray-200 p-3.5 rounded-2xl text-sm font-mono text-gray-500 bg-gray-50 cursor-not-allowed outline-none" placeholder="Se generará automáticamente" />
+                        </div>
+                      )}
+                      <div className="sm:col-span-2">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Contador Asignado</label>
+                        <select className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-black text-gray-900 bg-white" value={userFormData.assignedAccountantId} onChange={e => setUserFormData({...userFormData, assignedAccountantId: e.target.value})}>
+                          <option value="">Sin contador</option>
+                          {accountants.map(acc => (
+                            <option key={acc.id} value={acc.id}>{acc.name}</option>
+                          ))}
+                        </select>
                       </div>
                     </div>
                   </div>

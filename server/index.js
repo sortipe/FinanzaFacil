@@ -288,6 +288,67 @@ app.post('/analizar-recibo', async (req, res) => {
     }
 });
 
+// Endpoint para enviar correo con contraseña generada
+const nodemailer = require('nodemailer');
+app.post('/api/send-welcome-email', async (req, res) => {
+    const { email, name, password } = req.body;
+    if (!email || !name || !password) {
+        return res.status(400).json({ success: false, error: 'Faltan campos requeridos: email, name, password' });
+    }
+    // En desarrollo siempre se loguea la contraseña como respaldo
+    console.log(`\n========================================`);
+    console.log(`📧 CORREO DE BIENVENIDA (simulado)`);
+    console.log(`   Para: ${email}`);
+    console.log(`   Nombre: ${name}`);
+    console.log(`   Contraseña temporal: ${password}`);
+    console.log(`========================================\n`);
+    try {
+        const transporter = nodemailer.createTransport({
+            host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+            port: parseInt(process.env.EMAIL_PORT || '587'),
+            secure: false,
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+        await transporter.sendMail({
+            from: `"FinanzaFacil" <${process.env.EMAIL_FROM || process.env.EMAIL_USER}>`,
+            to: email,
+            subject: 'Bienvenido a FinanzaFacil - Tu contraseña temporal',
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 12px;">
+                    <div style="text-align: center; margin-bottom: 24px;">
+                        <h1 style="color: #7C3AED; font-size: 24px;">FinanzaFacil</h1>
+                    </div>
+                    <h2 style="color: #333;">¡Bienvenido, ${name}!</h2>
+                    <p style="color: #555; font-size: 14px; line-height: 1.6;">
+                        Tu cuenta ha sido creada exitosamente. Para acceder, utiliza la siguiente contraseña temporal:
+                    </p>
+                    <div style="background: #f3f4f6; padding: 16px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                        <code style="font-size: 24px; font-weight: bold; color: #7C3AED; letter-spacing: 4px;">${password}</code>
+                    </div>
+                    <p style="color: #e74c3c; font-size: 13px; font-weight: bold;">
+                        ⚠ Esta es una contraseña temporal. Debes cambiarla al iniciar sesión por primera vez.
+                    </p>
+                    <p style="color: #555; font-size: 13px; line-height: 1.6;">
+                        Por seguridad, no compartas esta contraseña con nadie.
+                    </p>
+                    <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 24px 0;" />
+                    <p style="color: #999; font-size: 11px; text-align: center;">
+                        FinanzaFacil - Tu plataforma de finanzas inteligentes
+                    </p>
+                </div>
+            `
+        });
+        console.log(`✅ Correo enviado exitosamente a ${email}`);
+        res.json({ success: true, message: 'Correo enviado correctamente' });
+    } catch (err) {
+        console.log(`⚠ No se pudo enviar el correo (la contraseña se logueó arriba): ${err.message}`);
+        res.json({ success: true, warning: err.message, message: 'Contraseña disponible en consola del servidor' });
+    }
+});
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
     console.log(`Servidor de Facturación SUNAT corriendo en http://localhost:${PORT}`);

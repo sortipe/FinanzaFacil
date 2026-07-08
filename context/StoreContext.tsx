@@ -14,10 +14,12 @@ interface StoreContextType {
   complaints: Complaint[];
   
   // Actions
-  login: (email: string, role: UserRole) => void;
+  login: (email: string, password: string) => boolean;
   logout: () => void;
   registerUser: (user: User) => void;
   updateUser: (userId: string, data: Partial<User>) => void;
+  changePassword: (userId: string, currentPassword: string, newPassword: string) => boolean;
+  generatePassword: (length?: number) => string;
   updateUserStatus: (userId: string, status: SubscriptionStatus) => void;
   addExpense: (expense: Expense) => void;
   addTaxDocument: (doc: TaxDocument) => void;
@@ -44,13 +46,15 @@ const StoreContext = createContext<StoreContextType | undefined>(undefined);
 const DEMO_QR = "iVBORw0KGgoAAAANSUhEUgAAAMgAAADIEAIAAACv9n9iAAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwwAADsMBx2+oZAAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIHYzLjUuMTAw9H66AAADeUlEQVR42u3c0XLjMAwEUP//6S0zdR0nImFIIAnuOedpmsZAsYtEiqvX63UBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAL7T398f/+X1en19ffG7wY093uR0V9pX8W/y7X839njP70N3pX0V98V0T/90Y8897z50V9pXcR/M9390Y8877z50V9pXcR/U9z90Y8+Xn/89777Xvop7ofv6f6fV76O/ybe73vX6P6eXfB90X/961+v/nF7yfdB9/etdr/9zesn3Qff1r3e9/s/pJR8AAMD3uV6vz7+n9/Y7CIsVvN75rXn++W683vktfP75Lrz++S283vktvP7vIywAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOD/5S8AAP//AwCHfK5Lz8Y/LAAAAABJRU5ErkJggg==";
 
 const INITIAL_USERS: User[] = [
-  { id: 'u1', name: 'Admin FinanzaFacil', email: 'admin@app.com', role: UserRole.ADMIN },
-  { id: 'u2', name: 'Contador Carlos Ruiz', email: 'carlos@contador.com', role: UserRole.ACCOUNTANT },
-  { id: 'u4', name: 'Contadora Maria Paz', email: 'maria@contador.com', role: UserRole.ACCOUNTANT },
+  { id: 'u1', name: 'Admin FinanzaFacil', email: 'admin@app.com', role: UserRole.ADMIN, password: '123', mustChangePassword: false },
+  { id: 'u2', name: 'Contador Carlos Ruiz', email: 'carlos@contador.com', role: UserRole.ACCOUNTANT, password: '123', mustChangePassword: false },
+  { id: 'u4', name: 'Contadora Maria Paz', email: 'maria@contador.com', role: UserRole.ACCOUNTANT, password: '123', mustChangePassword: false },
   { 
     id: 'u3', 
     name: 'Juan Pérez - Demo', 
     email: 'user@demo.com', 
+    password: '123',
+    mustChangePassword: false,
     role: UserRole.USER, 
     subscriptionStatus: SubscriptionStatus.ACTIVE, 
     assignedAccountantId: 'u2',
@@ -63,6 +67,8 @@ const INITIAL_USERS: User[] = [
     id: 'u5', 
     name: 'Elena Garcia', 
     email: 'elena@gmail.com', 
+    password: '123',
+    mustChangePassword: true,
     role: UserRole.USER, 
     subscriptionStatus: SubscriptionStatus.PENDING,
     assignedAccountantId: 'u2'
@@ -155,10 +161,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => localStorage.setItem('ff_sunat_global', JSON.stringify(sunatGlobalConfig)), [sunatGlobalConfig]);
   useEffect(() => localStorage.setItem('ff_complaints', JSON.stringify(complaints)), [complaints]);
 
-  const login = (email: string, role: UserRole) => {
-    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.role === role);
-    if (user) setCurrentUser(user);
-    else alert("Credenciales incorrectas.");
+  const login = (email: string, password: string): boolean => {
+    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    if (!user) {
+      alert("Credenciales incorrectas.");
+      return false;
+    }
+    if (user.password && user.password !== password) {
+      alert("Credenciales incorrectas.");
+      return false;
+    }
+    setCurrentUser(user);
+    return true;
   };
 
   const logout = () => {
@@ -170,6 +184,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const updateUser = (userId: string, data: Partial<User>) => {
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...data } : u));
     if (currentUser?.id === userId) setCurrentUser(prev => prev ? { ...prev, ...data } : null);
+  };
+
+  const changePassword = (userId: string, currentPassword: string, newPassword: string): boolean => {
+    const user = users.find(u => u.id === userId);
+    if (!user) return false;
+    if (user.password && user.password !== currentPassword) return false;
+    updateUser(userId, { password: newPassword, mustChangePassword: false });
+    return true;
+  };
+
+  const generatePassword = (length = 10): string => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%';
+    const array = new Uint8Array(length);
+    crypto.getRandomValues(array);
+    return Array.from(array, (byte) => chars[byte % chars.length]).join('');
   };
 
   const updateUserStatus = (userId: string, status: SubscriptionStatus) => updateUser(userId, { subscriptionStatus: status });
@@ -203,7 +232,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <StoreContext.Provider value={{
       currentUser, users, expenses, taxDocuments, packages, paymentMethods, subscriptionHistory, notifications, complaints, sunatGlobalConfig,
-      login, logout, registerUser, updateUser, updateUserStatus, addExpense, addTaxDocument, deleteTaxDocument,
+      login, logout, registerUser, updateUser, updateUserStatus, addExpense, addTaxDocument, deleteTaxDocument, changePassword, generatePassword,
       deleteUser, updatePaymentMethod, updatePackage, assignAccountant, addSubscriptionRecord,
       addNotification, markNotificationAsRead, addComplaint, updateComplaintStatus, updateSunatGlobalConfig
     }}>

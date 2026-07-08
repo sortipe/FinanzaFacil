@@ -11,7 +11,7 @@ import { UserRole, SubscriptionStatus } from './types';
 const MainApp: React.FC = () => {
   const { currentUser } = useStore();
 
-  if (!currentUser) {
+  if (!currentUser || currentUser.mustChangePassword) {
     return <Auth />;
   }
 
