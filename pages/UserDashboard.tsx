@@ -704,21 +704,19 @@ export const UserDashboard: React.FC = () => {
                   ))}
                </div>
            </div>
-           <div className="p-6 space-y-4 max-h-[500px] overflow-y-auto">
-              {filteredDocs.length === 0 && <div className="py-10 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">Buzón Vacío</div>}
-              {filteredDocs.slice().reverse().map(doc => (
-                <div key={doc.id} onClick={() => setPreviewDoc(doc)} className="p-4 bg-gray-50/50 rounded-2xl border border-gray-100 flex flex-col space-y-4 hover:border-brand-300 transition cursor-pointer group">
-                   <div className="flex items-center justify-between">
-                      <div className="bg-white px-3 py-1 rounded-full shadow-sm border border-gray-100 font-black text-[9px] text-gray-500 uppercase">{doc.periodMonth} {doc.periodYear}</div>
-                      {doc.sunatStatus === 'SENT' ? <span className="text-[8px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center"><CheckCircle2 className="w-3 h-3 mr-1"/> SUNAT OK</span> : <span className="text-[8px] bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-black uppercase">Enviado</span>}
-                   </div>
-                   <div className="flex items-center space-x-4">
-                      <div className="p-3 bg-white rounded-xl shadow-sm border border-gray-100 group-hover:scale-110 transition-transform">{doc.id.startsWith('RH-') ? <ReceiptText className="w-6 h-6 text-blue-700"/> : <FileText className="w-6 h-6 text-brand-600"/>}</div>
-                      <div className="min-w-0 flex-1"><p className="text-xs font-black text-gray-900 truncate uppercase tracking-tighter">{doc.name}</p><p className="text-[9px] font-bold text-gray-400 uppercase">{doc.id.startsWith('RH-') ? 'C. Electrónico' : 'Declaración Mensual'}</p></div>
-                   </div>
-                </div>
-              ))}
-           </div>
+            <div className="p-4 space-y-2 max-h-[500px] overflow-y-auto">
+               {filteredDocs.length === 0 && <div className="py-10 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">Buzón Vacío</div>}
+               {filteredDocs.slice().reverse().map(doc => (
+                 <div key={doc.id} onClick={() => setPreviewDoc(doc)} className="px-3 py-2.5 bg-gray-50/50 rounded-xl border border-gray-100 flex items-center gap-3 hover:border-brand-300 hover:bg-brand-50/40 transition cursor-pointer group">
+                    <div className="p-2 bg-white rounded-lg shadow-sm border border-gray-100 group-hover:scale-110 transition-transform shrink-0">{doc.id.startsWith('RH-') ? <ReceiptText className="w-4 h-4 text-blue-700"/> : <FileText className="w-4 h-4 text-brand-600"/>}</div>
+                    <div className="min-w-0 flex-1">
+                       <p className="text-[11px] font-black text-gray-900 truncate uppercase tracking-tighter leading-none">{doc.name}</p>
+                       <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">{doc.id.startsWith('RH-') ? 'C. Electrónico' : 'Declaración Mensual'} · {doc.periodMonth} {doc.periodYear}</p>
+                    </div>
+                    {doc.sunatStatus === 'SENT' ? <span className="text-[8px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><CheckCircle2 className="w-2.5 h-2.5 mr-1"/> OK</span> : <span className="text-[8px] bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-black uppercase shrink-0">Enviado</span>}
+                 </div>
+               ))}
+            </div>
         </div>
 
         </div>

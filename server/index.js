@@ -218,7 +218,7 @@ app.get('/consultar-dni', async (req, res) => {
         const { dni } = req.query;
         if (!dni || dni.length !== 8) return res.status(400).json({ success: false, error: 'DNI inválido' });
         const axios = require('axios');
-        const response = await axios.get(`https://ww1.sunat.gob.pe/ol-ti-itfisdenreg/itfisdenreg.htm?accion=obtenerDatosDni&numDocumento=${dni}`, { timeout: 10000 });
+        const response = await axios.get(`https://ww1.sunat.gob.pe/ol-ti-itfisdenreg/itfisdenreg.htm?accion=obtenerDatosDni&numDocumento=${dni}`, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Referer': 'https://ww1.sunat.gob.pe/' } });
         const data = response.data;
         const item = data.lista?.[0];
         if (data.message === 'success' && item?.nombresapellidos) {
@@ -237,7 +237,7 @@ app.get('/consultar-ruc', async (req, res) => {
         const { ruc } = req.query;
         if (!ruc || ruc.length !== 11) return res.status(400).json({ success: false, error: 'RUC inválido' });
         const axios = require('axios');
-        const response = await axios.get(`https://ww1.sunat.gob.pe/ol-ti-itfisdenreg/itfisdenreg.htm?accion=obtenerDatosRuc&nroRuc=${ruc}`, { timeout: 10000 });
+        const response = await axios.get(`https://ww1.sunat.gob.pe/ol-ti-itfisdenreg/itfisdenreg.htm?accion=obtenerDatosRuc&nroRuc=${ruc}`, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Referer': 'https://ww1.sunat.gob.pe/' } });
         const data = response.data;
         const item = data.lista?.[0];
         if (data.message === 'success' && item?.apenomdenunciado) {
