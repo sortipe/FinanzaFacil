@@ -8,6 +8,7 @@ import { sunatService } from '../services/sunatService';
 import { consultaService } from '../services/consultaService';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
 import { SunatSettings } from '../components/SunatSettings';
+import { InvoiceWizard } from '../components/InvoiceWizard';
 
 
 export const UserDashboard: React.FC = () => {
@@ -17,7 +18,8 @@ export const UserDashboard: React.FC = () => {
   const [showReceiptModal, setShowReceiptModal] = useState(false);
 
   const [analyzing, setAnalyzing] = useState(false);
-  const [docFilter, setDocFilter] = useState<'all' | 'rh' | 'factura' | 'pdt'>('all');
+  const [aiError, setAiError] = useState('');
+  const [docFilter, setDocFilter] = useState<'all' | 'rh' | 'factura' | 'pdt' | 'contador'>('all');
   const [previewDoc, setPreviewDoc] = useState<TaxDocument | null>(null);
   
   const downloadFile = (content: string, filename: string, type: string, isBase64: boolean = false) => {
@@ -189,12 +191,14 @@ export const UserDashboard: React.FC = () => {
       const file = e.target.files[0];
       const base64 = await fileToBase64(file);
       setPreviewInternal(base64);
+      setAiError('');
       handleAnalyze(base64, file.type);
     }
   };
 
   const handleAnalyze = async (base64: string, mime: string) => {
     setAnalyzing(true);
+    setAiError('');
     try {
       const data = await analyzeReceipt(base64, mime);
       setAmount(data.total.toString());
@@ -203,8 +207,8 @@ export const UserDashboard: React.FC = () => {
       setCategory(data.category);
       if (data.ruc) setRuc(data.ruc);
       if (data.invoiceNumber) setInvoiceNumber(data.invoiceNumber);
-    } catch (err) {
-      console.error("AI Analysis failed", err);
+    } catch (err: any) {
+      setAiError(err.message || 'Error al analizar el recibo. Puedes llenar los datos manualmente.');
     } finally {
       setAnalyzing(false);
     }
@@ -258,7 +262,7 @@ export const UserDashboard: React.FC = () => {
       const response = await sunatService.emitirReciboHonorarios(
         receiptForm, 
         activeToken,
-        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || 'http://localhost:5555',
+        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
         {
           ruc: currentUser?.ruc,
           user: currentUser?.solUser,
@@ -266,7 +270,7 @@ export const UserDashboard: React.FC = () => {
           certBase64: currentUser?.certBase64,
           certPass: currentUser?.certPass,
           emitterName: currentUser?.businessName,
-          env: currentUser?.sunatEnv || 'BETA'
+          env: 'PRODUCTION'
         }
       );
 
@@ -319,7 +323,7 @@ export const UserDashboard: React.FC = () => {
           total: parseFloat(invoiceForm.amount)
         }, 
         activeToken,
-        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || 'http://localhost:5555',
+        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
         {
           ruc: currentUser?.ruc,
           user: currentUser?.solUser,
@@ -327,7 +331,7 @@ export const UserDashboard: React.FC = () => {
           certBase64: currentUser?.certBase64,
           certPass: currentUser?.certPass,
           emitterName: currentUser?.businessName,
-          env: currentUser?.sunatEnv || 'BETA'
+          env: 'PRODUCTION'
         },
         invoiceForm.serie,
         invoiceForm.currency
@@ -414,13 +418,15 @@ export const UserDashboard: React.FC = () => {
   };
 
   if (!currentUser) return null;
-  const filteredDocs = taxDocuments.filter(d => 
-    d.userId === currentUser.id && 
-    (docFilter === 'all' || 
-     (docFilter === 'rh' ? d.id.startsWith('RH-') : 
-      docFilter === 'factura' ? d.id.startsWith('FACTURA-') : 
-      !d.id.startsWith('RH-') && !d.id.startsWith('FACTURA-')))
-  );
+  const filteredDocs = taxDocuments.filter(d => {
+    if (d.userId !== currentUser.id) return false;
+    if (docFilter === 'all') return true;
+    if (docFilter === 'contador') return d.uploadedBy === 'ACCOUNTANT';
+    if (docFilter === 'rh') return d.id.startsWith('RH-');
+    if (docFilter === 'factura') return d.id.startsWith('FACTURA-');
+    // pdt: ni RH ni FACTURA
+    return !d.id.startsWith('RH-') && !d.id.startsWith('FACTURA-');
+  });
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -430,7 +436,7 @@ export const UserDashboard: React.FC = () => {
           <p className="text-gray-500 text-sm font-medium tracking-tight">Gestiona tus finanzas personales y tributarias</p>
         </div>
         
-        {(!currentUser.user || !currentUser.pass) && (
+        {(!currentUser.solUser && !currentUser.user || !currentUser.solPass && !currentUser.pass) && (
           <div className="flex-1 bg-amber-50 border-2 border-amber-200 p-4 rounded-2xl flex items-center animate-pulse">
             <AlertTriangle className="w-5 h-5 text-amber-600 mr-3 shrink-0" />
             <div>
@@ -524,10 +530,23 @@ export const UserDashboard: React.FC = () => {
                       <Loader2 className="w-12 h-12 animate-spin"/>
                       <p className="text-sm font-black uppercase tracking-widest animate-pulse">Escaneando recibo...</p>
                    </div>
-                 )}
-               </div>
+                  )}
+                </div>
 
-               {/* SELECTOR DE PRIVACIDAD */}
+                {aiError && (
+                  <div className="p-4 bg-amber-50 border-2 border-amber-200 rounded-2xl flex items-center gap-3">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-black text-amber-800 uppercase">Error al escanear</p>
+                      <p className="text-[10px] text-amber-700 font-bold mt-0.5">{aiError}</p>
+                    </div>
+                    <button type="button" onClick={() => setAiError('')} className="ml-auto p-1 text-amber-400 hover:text-amber-600">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
+                {/* SELECTOR DE PRIVACIDAD */}
                <div className="bg-gray-50 p-6 rounded-3xl border-2 border-gray-100 space-y-4">
                   <div className="flex justify-between items-center">
                     <div className="flex items-center space-x-3">
@@ -679,29 +698,27 @@ export const UserDashboard: React.FC = () => {
         <div className="bg-white rounded-3xl border border-brand-100 shadow-sm overflow-hidden flex flex-col h-fit">
            <div className="p-6 border-b">
               <h3 className="font-black text-gray-800 mb-4 flex items-center text-xs uppercase tracking-widest"><FileText className="w-5 h-5 mr-2 text-brand-600" /> Mi Buzón Tributario</h3>
-              <div className="flex bg-gray-50 p-1 rounded-xl">
-                  {['all', 'rh', 'factura', 'pdt'].map(f => (
-                    <button key={f} onClick={() => setDocFilter(f as any)} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${docFilter === f ? 'bg-white text-brand-600 shadow-sm border border-brand-100' : 'text-gray-400'}`}>
-                      {f === 'all' ? 'Todo' : f === 'rh' ? 'RH' : f === 'factura' ? 'Factura' : 'PDT'}
-                    </button>
-                  ))}
+               <div className="flex bg-gray-50 p-1 rounded-xl">
+                   {['all', 'rh', 'factura', 'pdt', 'contador'].map(f => (
+                     <button key={f} onClick={() => setDocFilter(f as any)} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${docFilter === f ? 'bg-white text-brand-600 shadow-sm border border-brand-100' : 'text-gray-400'}`}>
+                       {f === 'all' ? 'Todo' : f === 'rh' ? 'RH' : f === 'factura' ? 'Factura' : f === 'pdt' ? 'PDT' : 'Contador'}
+                     </button>
+                   ))}
                </div>
            </div>
-           <div className="p-6 space-y-4 max-h-[500px] overflow-y-auto">
-              {filteredDocs.length === 0 && <div className="py-10 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">Buzón Vacío</div>}
-              {filteredDocs.slice().reverse().map(doc => (
-                <div key={doc.id} onClick={() => setPreviewDoc(doc)} className="p-4 bg-gray-50/50 rounded-2xl border border-gray-100 flex flex-col space-y-4 hover:border-brand-300 transition cursor-pointer group">
-                   <div className="flex items-center justify-between">
-                      <div className="bg-white px-3 py-1 rounded-full shadow-sm border border-gray-100 font-black text-[9px] text-gray-500 uppercase">{doc.periodMonth} {doc.periodYear}</div>
-                      {doc.sunatStatus === 'SENT' ? <span className="text-[8px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center"><CheckCircle2 className="w-3 h-3 mr-1"/> SUNAT OK</span> : <span className="text-[8px] bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-black uppercase">Enviado</span>}
-                   </div>
-                   <div className="flex items-center space-x-4">
-                      <div className="p-3 bg-white rounded-xl shadow-sm border border-gray-100 group-hover:scale-110 transition-transform">{doc.id.startsWith('RH-') ? <ReceiptText className="w-6 h-6 text-blue-700"/> : <FileText className="w-6 h-6 text-brand-600"/>}</div>
-                      <div className="min-w-0 flex-1"><p className="text-xs font-black text-gray-900 truncate uppercase tracking-tighter">{doc.name}</p><p className="text-[9px] font-bold text-gray-400 uppercase">{doc.id.startsWith('RH-') ? 'C. Electrónico' : 'Declaración Mensual'}</p></div>
-                   </div>
-                </div>
-              ))}
-           </div>
+            <div className="p-4 space-y-2 max-h-[500px] overflow-y-auto">
+               {filteredDocs.length === 0 && <div className="py-10 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">Buzón Vacío</div>}
+                {filteredDocs.slice().reverse().map(doc => (
+                  <div key={doc.id} onClick={() => setPreviewDoc(doc)} className={`px-3 py-2.5 rounded-xl border flex items-center gap-3 transition cursor-pointer group ${doc.uploadedBy === 'ACCOUNTANT' ? 'bg-blue-50/40 border-blue-100 hover:border-blue-300 hover:bg-blue-50/60' : 'bg-gray-50/50 border-gray-100 hover:border-brand-300 hover:bg-brand-50/40'}`}>
+                     <div className={`p-2 rounded-lg shadow-sm border group-hover:scale-110 transition-transform shrink-0 ${doc.uploadedBy === 'ACCOUNTANT' ? 'bg-white border-blue-100' : 'bg-white border-gray-100'}`}>{doc.uploadedBy === 'ACCOUNTANT' ? <User className="w-4 h-4 text-blue-700"/> : doc.id.startsWith('RH-') ? <ReceiptText className="w-4 h-4 text-blue-700"/> : <FileText className="w-4 h-4 text-brand-600"/>}</div>
+                     <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-black text-gray-900 truncate uppercase tracking-tighter leading-none">{doc.name}</p>
+                        <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">{doc.uploadedBy === 'ACCOUNTANT' ? 'De tu contador' : doc.id.startsWith('RH-') ? 'C. Electrónico' : 'Declaración Mensual'} · {doc.periodMonth} {doc.periodYear}</p>
+                     </div>
+                     {doc.uploadedBy === 'ACCOUNTANT' ? <span className="text-[8px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><User className="w-2.5 h-2.5 mr-1"/> CONT</span> : doc.sunatStatus === 'SENT' ? <span className="text-[8px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><CheckCircle2 className="w-2.5 h-2.5 mr-1"/> OK</span> : <span className="text-[8px] bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-black uppercase shrink-0">Enviado</span>}
+                  </div>
+                ))}
+            </div>
         </div>
 
         </div>
@@ -810,167 +827,74 @@ export const UserDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL DE EMISIÓN DE FACTURA */}
+      {/* MODAL DE EMISIÓN DE FACTURA / BOLETA (WIZARD) */}
       {showInvoiceModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 overflow-y-auto">
-           <div className="bg-white rounded-[2rem] w-full max-w-2xl overflow-hidden shadow-2xl animate-fade-in-up flex flex-col max-h-[90vh]">
-              <div className="p-6 bg-brand-700 text-white flex justify-between items-center shrink-0">
-                 <div className="flex items-center space-x-3"><FileInput className="w-7 h-7"/><h3 className="text-lg font-black uppercase tracking-tight text-white">Emisión de Factura Electrónica</h3></div>
-                 <button onClick={() => {setShowInvoiceModal(false); setInvoiceStep('form');}} className="text-white hover:rotate-90 transition-transform"><X className="w-6 h-6"/></button>
-              </div>
-
-              <div className="p-8 bg-white overflow-y-auto flex-1">
-                 {invoiceStep === 'form' ? (
-                   <form className="space-y-6" onSubmit={e => { e.preventDefault(); setInvoiceStep('preview'); }}>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                         <div>
-                            <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">DNI / RUC del Cliente</label>
-                            <div className="relative">
-                               <input type="text" name="recipientRuc" placeholder="20XXXXXXXXX" required maxLength={11} className="w-full bg-gray-50 border-2 border-gray-200 p-3.5 pr-12 rounded-xl text-sm font-mono font-bold text-gray-900 outline-none focus:border-brand-600 focus:bg-white" value={invoiceForm.recipientRuc} onChange={e => setInvoiceForm({...invoiceForm, recipientRuc: e.target.value})} />
-                               <button type="button" onClick={handleSearchInvoiceDoc} disabled={isSearchingRuc} className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-brand-100 text-brand-700 rounded-lg hover:bg-brand-200 disabled:opacity-50 transition">
-                                 {isSearchingRuc ? <Loader2 className="w-4 h-4 animate-spin"/> : <Search className="w-4 h-4"/>}
-                               </button>
-                            </div>
-                         </div>
-                         <div>
-                            <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">Razón Social</label>
-                            <input type="text" name="recipientName" placeholder="EMPRESA S.A.C." required className="w-full bg-gray-50 border-2 border-gray-200 p-3.5 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600 focus:bg-white uppercase" value={invoiceForm.recipientName} onChange={e => setInvoiceForm({...invoiceForm, recipientName: e.target.value})} />
-                         </div>
-                         <div className="sm:col-span-2">
-                            <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">Dirección del Cliente (Opcional)</label>
-                            <input type="text" name="recipientAddress" placeholder="Av. Los Pinos 123..." className="w-full bg-gray-50 border-2 border-gray-200 p-3.5 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600 focus:bg-white uppercase" value={invoiceForm.recipientAddress} onChange={e => setInvoiceForm({...invoiceForm, recipientAddress: e.target.value})} />
-                         </div>
-                         <div className="sm:col-span-2">
-                            <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">Descripción del Ítem</label>
-                            <textarea name="description" placeholder="Servicios de consultoría..." required className="w-full bg-gray-50 border-2 border-gray-200 p-3.5 rounded-xl text-sm font-bold text-gray-900 h-24 outline-none focus:border-brand-600 focus:bg-white" value={invoiceForm.description} onChange={e => setInvoiceForm({...invoiceForm, description: e.target.value})}></textarea>
-                         </div>
-                         <div>
-                            <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">Serie</label>
-                            <input type="text" name="serie" placeholder="F001" required maxLength={4} className="w-full bg-gray-50 border-2 border-gray-200 p-3.5 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600 focus:bg-white uppercase" value={invoiceForm.serie} onChange={e => setInvoiceForm({...invoiceForm, serie: e.target.value})} />
-                         </div>
-                         <div>
-                            <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">Moneda</label>
-                            <select className="w-full bg-gray-50 border-2 border-gray-200 p-3.5 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600 focus:bg-white" value={invoiceForm.currency} onChange={e => setInvoiceForm({...invoiceForm, currency: e.target.value})}>
-                              <option value="PEN">Soles (S/)</option>
-                              <option value="USD">Dólares ($)</option>
-                            </select>
-                         </div>
-                         <div>
-                            <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">Monto Total (Inc. IGV)</label>
-                            <input type="number" name="amount" placeholder="0.00" required className="w-full bg-gray-50 border-2 border-gray-200 p-3.5 rounded-xl text-sm font-black text-gray-900 outline-none focus:border-brand-600 focus:bg-white" value={invoiceForm.amount} onChange={e => setInvoiceForm({...invoiceForm, amount: e.target.value})} />
-                         </div>
-                         <div>
-                            <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">Fecha</label>
-                            <input type="date" name="date" required className="w-full bg-gray-50 border-2 border-gray-200 p-3.5 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600 focus:bg-white" value={invoiceForm.date} onChange={e => setInvoiceForm({...invoiceForm, date: e.target.value})} />
-                         </div>
-
-                         <div className="sm:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-gray-50 rounded-2xl border-2 border-gray-100">
-                            <div>
-                               <label className="text-[9px] font-black text-gray-400 uppercase mb-2 block ml-1">Tipo de Transacción</label>
-                               <div className="flex gap-2">
-                                  <button type="button" onClick={() => setInvoiceForm({...invoiceForm, paymentType: 'CONTADO'})} className={`flex-1 py-2 px-3 rounded-lg text-[10px] font-black transition-all ${invoiceForm.paymentType === 'CONTADO' ? 'bg-brand-700 text-white shadow-md' : 'bg-white text-gray-400 border border-gray-200'}`}>AL CONTADO</button>
-                                  <button type="button" onClick={() => setInvoiceForm({...invoiceForm, paymentType: 'CREDITO'})} className={`flex-1 py-2 px-3 rounded-lg text-[10px] font-black transition-all ${invoiceForm.paymentType === 'CREDITO' ? 'bg-brand-700 text-white shadow-md' : 'bg-white text-gray-400 border border-gray-200'}`}>AL CRÉDITO</button>
-                               </div>
-                            </div>
-                            <div>
-                               <label className="text-[9px] font-black text-gray-400 uppercase mb-2 block ml-1">Opciones Avanzadas</label>
-                               <div className="flex flex-wrap gap-2">
-                                  <label className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-gray-200 cursor-pointer">
-                                     <input type="checkbox" checked={invoiceForm.hasDetraction} onChange={e => setInvoiceForm({...invoiceForm, hasDetraction: e.target.checked})} className="w-3 h-3 accent-brand-700" />
-                                     <span className="text-[9px] font-black text-gray-600 uppercase">Detracción</span>
-                                  </label>
-                                  <label className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-gray-200 cursor-pointer">
-                                     <input type="checkbox" checked={invoiceForm.isExport} onChange={e => setInvoiceForm({...invoiceForm, isExport: e.target.checked})} className="w-3 h-3 accent-brand-700" />
-                                     <span className="text-[9px] font-black text-gray-600 uppercase">Exportación</span>
-                                  </label>
-                                  <label className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-gray-200 cursor-pointer">
-                                     <input type="checkbox" checked={invoiceForm.hasEstablishment} onChange={e => setInvoiceForm({...invoiceForm, hasEstablishment: e.target.checked})} className="w-3 h-3 accent-brand-700" />
-                                     <span className="text-[9px] font-black text-gray-600 uppercase">Establecimiento</span>
-                                  </label>
-                               </div>
-                            </div>
-                         </div>
-                         
-                         {invoiceForm.hasDetraction && (
-                           <div className="sm:col-span-2 grid grid-cols-2 gap-4 p-4 bg-amber-50 rounded-2xl border-2 border-amber-100 animate-pulse-subtle">
-                              <div>
-                                 <label className="text-[9px] font-black text-amber-700 uppercase mb-1 block ml-1">Bien/Servicio Detracción</label>
-                                 <select className="w-full bg-white border border-amber-200 p-2 rounded-lg text-xs font-bold text-gray-900" value={invoiceForm.detractionCode} onChange={e => setInvoiceForm({...invoiceForm, detractionCode: e.target.value})}>
-                                    <option value="001">Azúcar y melaza de caña</option>
-                                    <option value="022">Otros servicios empresariales</option>
-                                    <option value="037">Demás servicios gravados con IGV</option>
-                                 </select>
-                              </div>
-                              <div>
-                                 <label className="text-[9px] font-black text-amber-700 uppercase mb-1 block ml-1">Tasa %</label>
-                                 <input type="number" className="w-full bg-white border border-amber-200 p-2 rounded-lg text-xs font-bold text-gray-900" value={invoiceForm.detractionPercent} onChange={e => setInvoiceForm({...invoiceForm, detractionPercent: parseFloat(e.target.value)})} />
-                              </div>
-                           </div>
-                         )}
-                      </div>
-                      <button type="submit" className="w-full py-4 bg-brand-700 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-brand-900 shadow-xl flex items-center justify-center transition-all"><Eye className="w-4 h-4 mr-2" /> Previsualizar Factura</button>
-                   </form>
-                 ) : invoiceStep === 'preview' ? (
-                   <div className="space-y-6">
-                      <div className="border-4 border-brand-50 bg-white p-8 rounded-[1.5rem] shadow-inner">
-                         <h4 className="text-brand-700 font-black text-xs uppercase mb-6 tracking-widest border-b border-brand-100 pb-2">Vista Previa de Factura</h4>
-                         <div className="space-y-4 text-xs font-bold text-gray-700">
-                            <p className="flex justify-between border-b border-gray-50 pb-2"><span className="text-gray-400 uppercase text-[9px]">Serie:</span><span className="font-black text-gray-900">{invoiceForm.serie}</span></p>
-                            <p className="flex justify-between border-b border-gray-50 pb-2"><span className="text-gray-400 uppercase text-[9px]">Cliente:</span><span className="font-black text-gray-900">{invoiceForm.recipientName}</span></p>
-                            <p className="flex flex-col space-y-1"><span className="text-gray-400 uppercase text-[9px]">Detalle:</span><span className="italic text-gray-600 leading-tight">"{invoiceForm.description}"</span></p>
-                            <div className="ml-auto w-full max-w-[200px] space-y-2 pt-6 border-t-2 border-brand-700 text-right">
-                               <p className="text-gray-400 uppercase text-[9px]">Subtotal: {invoiceForm.currency === 'PEN' ? 'S/' : '$'} {(parseFloat(invoiceForm.amount) / 1.18).toFixed(2)}</p>
-                               <p className="text-gray-400 uppercase text-[9px]">IGV (18%): {invoiceForm.currency === 'PEN' ? 'S/' : '$'} {(parseFloat(invoiceForm.amount) - (parseFloat(invoiceForm.amount) / 1.18)).toFixed(2)}</p>
-                               <p className="text-brand-900 font-black uppercase text-[10px]">Total {invoiceForm.currency === 'PEN' ? 'S/' : '$'} <span className="text-brand-600 text-lg">{parseFloat(invoiceForm.amount).toFixed(2)}</span></p>
-                            </div>
-                         </div>
-                      </div>
-                      {syncError && (
-                         <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 font-bold text-xs">
-                           <AlertTriangle className="w-5 h-5 mb-1 inline-block mr-2" />
-                           {syncError}
-                         </div>
-                      )}
-
-                      <div className="flex flex-col sm:flex-row gap-3">
-                         <button type="button" onClick={() => setInvoiceStep('form')} className="flex-1 py-4 border-2 border-brand-100 text-brand-700 rounded-2xl font-black uppercase text-[10px] hover:bg-brand-50 transition">Editar Datos</button>
-                         <button type="button" onClick={handleInvoiceOfficialSync} className="flex-1 py-4 bg-brand-700 text-white rounded-2xl font-black uppercase text-[10px] shadow-xl flex items-center justify-center hover:bg-brand-900 transition"><Globe className="w-3.5 h-3.5 mr-2"/> Emitir Oficialmente</button>
-                      </div>
-                   </div>
-                 ) : (
-                   <div className="text-center py-12 space-y-6 bg-white">
-                      {isSyncing ? (
-                        <>
-                          <Loader2 className="w-16 h-16 text-brand-700 animate-spin mx-auto"/>
-                          <div className="space-y-2">
-                             <p className="text-sm font-black uppercase tracking-widest text-brand-900">Comunicando con SUNAT...</p>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto shadow-inner"><CheckCircle2 className="w-10 h-10"/></div>
-                          <div className="space-y-2">
-                             <h4 className="text-xl font-black text-green-900 uppercase">¡Factura Emitida!</h4>
-                             <p className="text-xs text-gray-500 font-bold max-w-xs mx-auto">El comprobante ha sido enviado y aceptado por SUNAT.</p>
-                          </div>
-                          <button onClick={() => emitTaxDocument('FACTURA', true)} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl mt-6 hover:bg-green-700 transition">Regresar al Dashboard</button>
-                        </>
-                      )}
-                   </div>
-                 )}
-              </div>
-           </div>
-        </div>
+        <InvoiceWizard
+          onClose={() => setShowInvoiceModal(false)}
+          onEmitted={(result) => {
+            if (!currentUser) return;
+            let xmlUrl = '';
+            if (result.xmlContent) {
+              const blob = new Blob([result.xmlContent], { type: 'text/xml' });
+              xmlUrl = URL.createObjectURL(blob);
+            }
+            let cdrUrl = '';
+            if (result.cdrBase64) {
+              const binary = atob(result.cdrBase64);
+              const array = new Uint8Array(binary.length);
+              for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+              const blob = new Blob([array], { type: 'application/zip' });
+              cdrUrl = URL.createObjectURL(blob);
+            }
+            addTaxDocument({
+              id: result.id,
+              userId: currentUser.id,
+              accountantId: currentUser.assignedAccountantId || 'u2',
+              name: result.name,
+              fileUrl: '',
+              pdfUrl: '',
+              xmlUrl,
+              cdrUrl,
+              xmlContent: result.xmlContent,
+              cdrBase64: result.cdrBase64,
+              mimeType: 'application/xml',
+              uploadDate: new Date().toISOString().split('T')[0],
+              periodMonth: new Date().toLocaleDateString('es-ES', { month: 'long' }),
+              periodYear: new Date().getFullYear(),
+              sunatStatus: result.sunatStatus as any,
+              sunatHash: Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join('')
+            });
+            // También registrar como movimiento de ingreso
+            if (result.amount) {
+              addExpense({
+                id: `exp-${result.id}-${Date.now()}`,
+                userId: currentUser.id,
+                amount: result.amount,
+                currency: 'PEN',
+                description: result.customerName ? `${result.name} - ${result.customerName}` : result.name,
+                date: new Date().toISOString().split('T')[0],
+                category: 'Facturación Electrónica',
+                invoiceNumber: result.id,
+                isPrivate: false
+              });
+            }
+          }}
+        />
       )}
 
       {/* PREVISUALIZACIÓN DE DOCUMENTO ARCHIVADO */}
       {previewDoc && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 p-4 overflow-y-auto">
            <div className="bg-white rounded-[2rem] w-full max-w-2xl h-fit overflow-hidden flex flex-col shadow-2xl relative">
-              <div className="p-6 border-b flex justify-between items-center bg-gray-50">
-                 <h3 className="text-sm font-black uppercase tracking-widest text-gray-800 italic">{previewDoc.name}</h3>
-                 <button onClick={() => setPreviewDoc(null)} className="p-2 bg-white rounded-full hover:bg-gray-100 transition shadow-sm"><X className="w-6 h-6 text-gray-400"/></button>
-              </div>
+               <div className="p-6 border-b flex justify-between items-center bg-gray-50">
+                  <div className="flex items-center gap-3 min-w-0">
+                     <h3 className="text-sm font-black uppercase tracking-widest text-gray-800 italic truncate">{previewDoc.name}</h3>
+                     {previewDoc.uploadedBy === 'ACCOUNTANT' && (
+                        <span className="shrink-0 text-[9px] bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full font-black uppercase flex items-center"><User className="w-3 h-3 mr-1"/> Enviado por tu contador</span>
+                     )}
+                  </div>
+                  <button onClick={() => setPreviewDoc(null)} className="p-2 bg-white rounded-full hover:bg-gray-100 transition shadow-sm shrink-0"><X className="w-6 h-6 text-gray-400"/></button>
+               </div>
               <div className="p-10 flex-1 bg-white">
                  <div className="border-4 border-gray-100 p-8 rounded-3xl space-y-8 relative overflow-hidden bg-white">
                     <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none rotate-12">
@@ -1019,6 +943,15 @@ export const UserDashboard: React.FC = () => {
                         </div>
                      </div>
                      <div className="p-6 border-t flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3 justify-center bg-gray-50">
+                  {/* Descarga de archivo subido por el contador (fileUrl es Base64) */}
+                  {previewDoc.uploadedBy === 'ACCOUNTANT' && previewDoc.fileUrl && (
+                    <button
+                      onClick={() => downloadFile(previewDoc.fileUrl, previewDoc.name, previewDoc.mimeType || 'application/octet-stream', true)}
+                      className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-blue-700 transition flex items-center justify-center"
+                    >
+                      <Download className="w-4 h-4 mr-2"/> Descargar Archivo
+                    </button>
+                  )}
                   {previewDoc.pdfUrl && (
                     <a href={previewDoc.pdfUrl} target="_blank" rel="noopener noreferrer" className="px-10 py-4 bg-brand-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-brand-700 transition flex items-center justify-center">
                       <Download className="w-4 h-4 mr-2"/> Descargar PDF

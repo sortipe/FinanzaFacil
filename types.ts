@@ -17,6 +17,7 @@ export interface User {
   email: string;
   role: UserRole;
   password?: string;
+  mustChangePassword?: boolean;
   subscriptionStatus?: SubscriptionStatus;
   assignedAccountantId?: string | null;
   profilePicture?: string;
@@ -33,6 +34,8 @@ export interface User {
   sunatApiUrl?: string; // Para alternar entre Sandbox y Producción
   certBase64?: string; // Certificado PFX en Base64
   certPass?: string;   // Contraseña del certificado
+  serieFactura?: string; // Serie para facturas (ej: F001)
+  serieBoleta?: string;  // Serie para boletas (ej: B001)
 }
 
 export interface TaxDocument {
@@ -45,8 +48,10 @@ export interface TaxDocument {
   uploadDate: string;
   periodMonth: string;
   periodYear: number;
-  sunatStatus?: 'PENDING' | 'SENT' | 'REJECTED';
+  sunatStatus?: 'PENDING' | 'SENT' | 'REJECTED' | 'INTERNO';
   sunatHash?: string;
+  // Origen del documento: 'ACCOUNTANT' (subido por el contador) | 'USER' (emitido/archivado por el usuario)
+  uploadedBy?: 'ACCOUNTANT' | 'USER';
   pdfUrl?: string;
   xmlUrl?: string;
   cdrUrl?: string;
@@ -62,6 +67,14 @@ export interface TaxDocument {
     netAmount: number;
     date: string;
   };
+}
+
+export interface InvoiceItem {
+  quantity: number;
+  unit: string;
+  description: string;
+  unitPrice: number;
+  total: number;
 }
 
 export interface Expense {
@@ -109,10 +122,11 @@ export interface SubscriptionRecord {
 
 export interface AdminNotification {
   id: string;
+  userId?: string;
   message: string;
   date: string;
   isRead: boolean;
-  type: 'SUBSCRIPTION' | 'SYSTEM';
+  type: 'SUBSCRIPTION' | 'SYSTEM' | 'ACCOUNTANT_DOC';
 }
 export interface Complaint {
   id: string;

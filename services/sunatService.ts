@@ -66,7 +66,6 @@ export const sunatService = {
       const isLocal = apiUrl && apiUrl.includes('localhost');
       
       if (isLocal) {
-          // Lógica para el servidor local propio (Costo Cero)
           const payload = {
               invoiceData: {
                   id: `${serie || (data.recipientRuc?.length === 8 ? 'B001' : 'F001')}-${Math.floor(Math.random() * 100000)}`,
@@ -85,9 +84,8 @@ export const sunatService = {
                   isExport: data.isExport,
                   hasEstablishment: data.hasEstablishment
               },
-              credentials: userCredentials // Pasamos RUC, Usuario, Clave SOL y Certificado
+              credentials: userCredentials
           };
-
 
           const response = await fetch(`${apiUrl}/emitir-factura`, {
               method: 'POST',
@@ -108,59 +106,44 @@ export const sunatService = {
               return { success: false, error: result.error };
           }
       } else {
-          // Lógica anterior de APISUNAT (Con costo)
-          const isDni = data.recipientRuc?.length === 8;
-          const total = parseFloat(data.total) || 0;
-          const payload: any = {
-            documento: isDni ? 'boleta' : 'factura',
-            serie: isDni ? 'B001' : 'F001',
-            numero: Math.floor(Math.random() * 100000),
-            fecha_de_emision: data.date,
-            moneda: 'PEN',
-            cliente_tipo_de_documento: isDni ? '1' : '6',
-            cliente_numero_de_documento: data.recipientRuc,
-            cliente_denominacion: data.recipientName,
-            cliente_direccion: data.recipientAddress || 'CIUDAD',
-            items: data.items.map((item: any) => ({
-              unidad_de_medida: 'NIU',
-              descripcion: item.description,
-              cantidad: item.quantity.toString(),
-              valor_unitario: (item.unitPrice / 1.18).toFixed(2),
-              codigo_tipo_afectacion_igv: '10',
-              porcentaje_igv: '18.00',
-              nombre_tributo: 'IGV',
-              total: parseFloat(item.total).toFixed(2)
-            })),
-            tipo_operacion: '0101',
-            forma_pago: 'Contado',
-            total: total.toFixed(2)
-          };
-
-          const response = await fetch(`${apiUrl}/documents`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify(payload)
-          });
-
-          const result = await response.json();
-          if (response.ok && result.success) {
-            return {
-              success: true,
-              data: result,
-              pdfUrl: result.payload?.pdf?.a4,
-              xmlUrl: result.payload?.xml,
-              sunatStatus: result.payload?.estado
-            };
-          } else {
-            return { success: false, error: result.message || 'Error en APISUNAT' };
-          }
+          return sunatService.emitirConApisunat(data, token, apiUrl);
       }
     } catch (error) {
       console.error('Error emitting Factura:', error);
       return { success: false, error: 'Error de conexión con el servidor de SUNAT' };
+    }
+  },
+
+  emitirConApisunat: async (
+    payload: any,
+    token: string,
+    apiUrl: string = BASE_URL_PROD
+  ): Promise<SunatResponse> => {
+    try {
+      const response = await fetch(`${apiUrl}/documents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+      if (response.ok && result.success) {
+        return {
+          success: true,
+          data: result,
+          pdfUrl: result.payload?.pdf?.a4,
+          xmlUrl: result.payload?.xml,
+          sunatStatus: result.payload?.estado
+        };
+      } else {
+        return { success: false, error: result.message || result.error || 'Error en APISUNAT' };
+      }
+    } catch (error) {
+      console.error('Error en APISUNAT:', error);
+      return { success: false, error: 'Error de conexión con APISUNAT' };
     }
   }
 };

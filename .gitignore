@@ -24,3 +24,7 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Secretos / configuración local (no commitear)
+opencode.json
+server/.env

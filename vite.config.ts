@@ -8,12 +8,19 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        allowedHosts: true,
         proxy: {
           '/api': {
-            target: 'http://localhost:4000',
+            target: 'http://localhost:5555',
             changeOrigin: true,
-            rewrite: (path) => path.replace(/^\/api/, '')
-          }
+          },
+          '/consultar-dni': { target: 'http://localhost:5555', changeOrigin: true },
+          '/consultar-ruc': { target: 'http://localhost:5555', changeOrigin: true },
+          '/emitir-factura': { target: 'http://localhost:5555', changeOrigin: true },
+          '/consultar-cpe': { target: 'http://localhost:5555', changeOrigin: true },
+          '/verificar-conexion': { target: 'http://localhost:5555', changeOrigin: true },
+          '/analizar-recibo': { target: 'http://localhost:5555', changeOrigin: true },
+          '/status': { target: 'http://localhost:5555', changeOrigin: true }
         }
       },
       plugins: [react()],
