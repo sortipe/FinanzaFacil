@@ -160,7 +160,7 @@ export const AdminDashboard: React.FC = () => {
         mustChangePassword: true
       };
       registerUser(newUser);
-      fetch('http://localhost:5555/api/send-welcome-email', {
+      fetch('/api/send-welcome-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: newUser.email, name: newUser.name, password: pwd })

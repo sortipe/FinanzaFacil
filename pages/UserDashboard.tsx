@@ -19,7 +19,7 @@ export const UserDashboard: React.FC = () => {
 
   const [analyzing, setAnalyzing] = useState(false);
   const [aiError, setAiError] = useState('');
-  const [docFilter, setDocFilter] = useState<'all' | 'rh' | 'factura' | 'pdt'>('all');
+  const [docFilter, setDocFilter] = useState<'all' | 'rh' | 'factura' | 'pdt' | 'contador'>('all');
   const [previewDoc, setPreviewDoc] = useState<TaxDocument | null>(null);
   
   const downloadFile = (content: string, filename: string, type: string, isBase64: boolean = false) => {
@@ -262,7 +262,7 @@ export const UserDashboard: React.FC = () => {
       const response = await sunatService.emitirReciboHonorarios(
         receiptForm, 
         activeToken,
-        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || 'http://localhost:5555',
+        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
         {
           ruc: currentUser?.ruc,
           user: currentUser?.solUser,
@@ -323,7 +323,7 @@ export const UserDashboard: React.FC = () => {
           total: parseFloat(invoiceForm.amount)
         }, 
         activeToken,
-        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || 'http://localhost:5555',
+        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
         {
           ruc: currentUser?.ruc,
           user: currentUser?.solUser,
@@ -418,13 +418,15 @@ export const UserDashboard: React.FC = () => {
   };
 
   if (!currentUser) return null;
-  const filteredDocs = taxDocuments.filter(d => 
-    d.userId === currentUser.id && 
-    (docFilter === 'all' || 
-     (docFilter === 'rh' ? d.id.startsWith('RH-') : 
-      docFilter === 'factura' ? d.id.startsWith('FACTURA-') : 
-      !d.id.startsWith('RH-') && !d.id.startsWith('FACTURA-')))
-  );
+  const filteredDocs = taxDocuments.filter(d => {
+    if (d.userId !== currentUser.id) return false;
+    if (docFilter === 'all') return true;
+    if (docFilter === 'contador') return d.uploadedBy === 'ACCOUNTANT';
+    if (docFilter === 'rh') return d.id.startsWith('RH-');
+    if (docFilter === 'factura') return d.id.startsWith('FACTURA-');
+    // pdt: ni RH ni FACTURA
+    return !d.id.startsWith('RH-') && !d.id.startsWith('FACTURA-');
+  });
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -696,26 +698,26 @@ export const UserDashboard: React.FC = () => {
         <div className="bg-white rounded-3xl border border-brand-100 shadow-sm overflow-hidden flex flex-col h-fit">
            <div className="p-6 border-b">
               <h3 className="font-black text-gray-800 mb-4 flex items-center text-xs uppercase tracking-widest"><FileText className="w-5 h-5 mr-2 text-brand-600" /> Mi Buzón Tributario</h3>
-              <div className="flex bg-gray-50 p-1 rounded-xl">
-                  {['all', 'rh', 'factura', 'pdt'].map(f => (
-                    <button key={f} onClick={() => setDocFilter(f as any)} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${docFilter === f ? 'bg-white text-brand-600 shadow-sm border border-brand-100' : 'text-gray-400'}`}>
-                      {f === 'all' ? 'Todo' : f === 'rh' ? 'RH' : f === 'factura' ? 'Factura' : 'PDT'}
-                    </button>
-                  ))}
+               <div className="flex bg-gray-50 p-1 rounded-xl">
+                   {['all', 'rh', 'factura', 'pdt', 'contador'].map(f => (
+                     <button key={f} onClick={() => setDocFilter(f as any)} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${docFilter === f ? 'bg-white text-brand-600 shadow-sm border border-brand-100' : 'text-gray-400'}`}>
+                       {f === 'all' ? 'Todo' : f === 'rh' ? 'RH' : f === 'factura' ? 'Factura' : f === 'pdt' ? 'PDT' : 'Contador'}
+                     </button>
+                   ))}
                </div>
            </div>
             <div className="p-4 space-y-2 max-h-[500px] overflow-y-auto">
                {filteredDocs.length === 0 && <div className="py-10 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">Buzón Vacío</div>}
-               {filteredDocs.slice().reverse().map(doc => (
-                 <div key={doc.id} onClick={() => setPreviewDoc(doc)} className="px-3 py-2.5 bg-gray-50/50 rounded-xl border border-gray-100 flex items-center gap-3 hover:border-brand-300 hover:bg-brand-50/40 transition cursor-pointer group">
-                    <div className="p-2 bg-white rounded-lg shadow-sm border border-gray-100 group-hover:scale-110 transition-transform shrink-0">{doc.id.startsWith('RH-') ? <ReceiptText className="w-4 h-4 text-blue-700"/> : <FileText className="w-4 h-4 text-brand-600"/>}</div>
-                    <div className="min-w-0 flex-1">
-                       <p className="text-[11px] font-black text-gray-900 truncate uppercase tracking-tighter leading-none">{doc.name}</p>
-                       <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">{doc.id.startsWith('RH-') ? 'C. Electrónico' : 'Declaración Mensual'} · {doc.periodMonth} {doc.periodYear}</p>
-                    </div>
-                    {doc.sunatStatus === 'SENT' ? <span className="text-[8px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><CheckCircle2 className="w-2.5 h-2.5 mr-1"/> OK</span> : <span className="text-[8px] bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-black uppercase shrink-0">Enviado</span>}
-                 </div>
-               ))}
+                {filteredDocs.slice().reverse().map(doc => (
+                  <div key={doc.id} onClick={() => setPreviewDoc(doc)} className={`px-3 py-2.5 rounded-xl border flex items-center gap-3 transition cursor-pointer group ${doc.uploadedBy === 'ACCOUNTANT' ? 'bg-blue-50/40 border-blue-100 hover:border-blue-300 hover:bg-blue-50/60' : 'bg-gray-50/50 border-gray-100 hover:border-brand-300 hover:bg-brand-50/40'}`}>
+                     <div className={`p-2 rounded-lg shadow-sm border group-hover:scale-110 transition-transform shrink-0 ${doc.uploadedBy === 'ACCOUNTANT' ? 'bg-white border-blue-100' : 'bg-white border-gray-100'}`}>{doc.uploadedBy === 'ACCOUNTANT' ? <User className="w-4 h-4 text-blue-700"/> : doc.id.startsWith('RH-') ? <ReceiptText className="w-4 h-4 text-blue-700"/> : <FileText className="w-4 h-4 text-brand-600"/>}</div>
+                     <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-black text-gray-900 truncate uppercase tracking-tighter leading-none">{doc.name}</p>
+                        <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">{doc.uploadedBy === 'ACCOUNTANT' ? 'De tu contador' : doc.id.startsWith('RH-') ? 'C. Electrónico' : 'Declaración Mensual'} · {doc.periodMonth} {doc.periodYear}</p>
+                     </div>
+                     {doc.uploadedBy === 'ACCOUNTANT' ? <span className="text-[8px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><User className="w-2.5 h-2.5 mr-1"/> CONT</span> : doc.sunatStatus === 'SENT' ? <span className="text-[8px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><CheckCircle2 className="w-2.5 h-2.5 mr-1"/> OK</span> : <span className="text-[8px] bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-black uppercase shrink-0">Enviado</span>}
+                  </div>
+                ))}
             </div>
         </div>
 
@@ -884,10 +886,15 @@ export const UserDashboard: React.FC = () => {
       {previewDoc && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 p-4 overflow-y-auto">
            <div className="bg-white rounded-[2rem] w-full max-w-2xl h-fit overflow-hidden flex flex-col shadow-2xl relative">
-              <div className="p-6 border-b flex justify-between items-center bg-gray-50">
-                 <h3 className="text-sm font-black uppercase tracking-widest text-gray-800 italic">{previewDoc.name}</h3>
-                 <button onClick={() => setPreviewDoc(null)} className="p-2 bg-white rounded-full hover:bg-gray-100 transition shadow-sm"><X className="w-6 h-6 text-gray-400"/></button>
-              </div>
+               <div className="p-6 border-b flex justify-between items-center bg-gray-50">
+                  <div className="flex items-center gap-3 min-w-0">
+                     <h3 className="text-sm font-black uppercase tracking-widest text-gray-800 italic truncate">{previewDoc.name}</h3>
+                     {previewDoc.uploadedBy === 'ACCOUNTANT' && (
+                        <span className="shrink-0 text-[9px] bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full font-black uppercase flex items-center"><User className="w-3 h-3 mr-1"/> Enviado por tu contador</span>
+                     )}
+                  </div>
+                  <button onClick={() => setPreviewDoc(null)} className="p-2 bg-white rounded-full hover:bg-gray-100 transition shadow-sm shrink-0"><X className="w-6 h-6 text-gray-400"/></button>
+               </div>
               <div className="p-10 flex-1 bg-white">
                  <div className="border-4 border-gray-100 p-8 rounded-3xl space-y-8 relative overflow-hidden bg-white">
                     <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none rotate-12">
@@ -936,6 +943,15 @@ export const UserDashboard: React.FC = () => {
                         </div>
                      </div>
                      <div className="p-6 border-t flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3 justify-center bg-gray-50">
+                  {/* Descarga de archivo subido por el contador (fileUrl es Base64) */}
+                  {previewDoc.uploadedBy === 'ACCOUNTANT' && previewDoc.fileUrl && (
+                    <button
+                      onClick={() => downloadFile(previewDoc.fileUrl, previewDoc.name, previewDoc.mimeType || 'application/octet-stream', true)}
+                      className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-blue-700 transition flex items-center justify-center"
+                    >
+                      <Download className="w-4 h-4 mr-2"/> Descargar Archivo
+                    </button>
+                  )}
                   {previewDoc.pdfUrl && (
                     <a href={previewDoc.pdfUrl} target="_blank" rel="noopener noreferrer" className="px-10 py-4 bg-brand-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-brand-700 transition flex items-center justify-center">
                       <Download className="w-4 h-4 mr-2"/> Descargar PDF

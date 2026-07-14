@@ -149,7 +149,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   });
   const [sunatGlobalConfig, setSunatGlobalConfig] = useState(() => {
     const saved = localStorage.getItem('ff_sunat_global');
-    return saved ? JSON.parse(saved) : { sunatToken: '', sunatApiUrl: 'http://localhost:5555' };
+    return saved ? JSON.parse(saved) : { sunatToken: '', sunatApiUrl: '' };
   });
 
   useEffect(() => localStorage.setItem('ff_users', JSON.stringify(users)), [users]);

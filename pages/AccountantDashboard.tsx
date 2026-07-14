@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
-import { UserRole, Expense, TaxDocument, SubscriptionStatus } from '../types';
+import { UserRole, Expense, TaxDocument, SubscriptionStatus, AdminNotification } from '../types';
 import { buildPdtCsv } from '../utils/pdtFormatter';
 import {
   User as UserIcon, Users, ArrowLeft, ImageIcon, X, ShieldCheck, FileText,
@@ -17,7 +17,7 @@ const MONTHS = [
 const YEARS = [2023, 2024, 2025, 2026, 2027];
 
 export const AccountantDashboard: React.FC = () => {
-  const { users, currentUser, expenses, taxDocuments, addTaxDocument, deleteTaxDocument, registerUser, generatePassword } = useStore();
+  const { users, currentUser, expenses, taxDocuments, addTaxDocument, deleteTaxDocument, registerUser, generatePassword, addNotification } = useStore();
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
   const [showCreateClientModal, setShowCreateClientModal] = useState(false);
@@ -51,6 +51,7 @@ export const AccountantDashboard: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState(MONTHS[new Date().getMonth()]);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [previewFile, setPreviewFile] = useState<string | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<TaxDocument | null>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
 
   const myClients = useMemo(() =>
@@ -109,7 +110,7 @@ export const AccountantDashboard: React.FC = () => {
       taxAddress: newClientData.taxAddress
     };
     registerUser(newUser);
-    fetch('http://localhost:5555/api/send-welcome-email', {
+    fetch('/api/send-welcome-email', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: newUser.email, name: newUser.name, password: pwd })
@@ -121,28 +122,57 @@ export const AccountantDashboard: React.FC = () => {
 
   // ─── Handle Doc Upload ───
   const handleDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0] && currentUser) {
+    try {
+      if (!e.target.files || !e.target.files[0] || !currentUser) return;
       const file = e.target.files[0];
       const reader = new FileReader();
       reader.onload = () => {
-        const base64 = (reader.result as string).split(',')[1];
-        const newDoc: TaxDocument = {
-          id: Date.now().toString(),
-          userId: uploadClientId || selectedClientId || '',
-          accountantId: currentUser.id,
-          name: docName || file.name,
-          fileUrl: base64,
-          mimeType: file.type,
-          uploadDate: new Date().toISOString().split('T')[0],
-          periodMonth: selectedMonth,
-          periodYear: selectedYear
-        };
-        addTaxDocument(newDoc);
-        setDocName('');
-        setPreviewFile(null);
+        try {
+          const base64 = (reader.result as string).split(',')[1];
+          const targetClientId = uploadClientId || selectedClientId || '';
+          const finalName = docName || file.name;
+          const newDoc: TaxDocument = {
+            id: Date.now().toString(),
+            userId: targetClientId,
+            accountantId: currentUser.id,
+            name: finalName,
+            fileUrl: base64,
+            mimeType: file.type,
+            uploadDate: new Date().toISOString().split('T')[0],
+            periodMonth: selectedMonth,
+            periodYear: selectedYear,
+            uploadedBy: 'ACCOUNTANT'
+          };
+          addTaxDocument(newDoc);
+          if (targetClientId) {
+            addNotification({
+              id: `notif-${Date.now()}`,
+              userId: targetClientId,
+              message: `Tu contador te envió: ${finalName}`,
+              date: new Date().toLocaleString('es-ES'),
+              isRead: false,
+              type: 'ACCOUNTANT_DOC'
+            });
+          }
+          setDocName('');
+          setPreviewFile(null);
+          setIsUploadingDoc(false);
+        } catch (innerErr) {
+          console.error('Error al procesar documento:', innerErr);
+          alert('Error al procesar el archivo. Intenta con un archivo más pequeño.');
+          setIsUploadingDoc(false);
+        }
+      };
+      reader.onerror = () => {
+        console.error('Error al leer archivo');
+        alert('No se pudo leer el archivo. Intenta de nuevo.');
         setIsUploadingDoc(false);
       };
       reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('Error en handleDocUpload:', err);
+      alert('Error inesperado al subir el documento.');
+      setIsUploadingDoc(false);
     }
   };
 
@@ -164,6 +194,31 @@ export const AccountantDashboard: React.FC = () => {
   };
 
   // ─── Export helpers ───
+  const downloadFile = (content: string, filename: string, type: string, isBase64: boolean = false) => {
+    try {
+      let blob;
+      if (isBase64) {
+        const binary = atob(content);
+        const array = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+        blob = new Blob([array], { type });
+      } else {
+        blob = new Blob([content], { type });
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    } catch (err) {
+      console.error('Error al descargar:', err);
+      alert('No se pudo descargar el archivo.');
+    }
+  };
+
   const exportToExcel = (clientName: string, clientExpenses: Expense[]) => {
     const headers = ["Fecha", "RUC Emisor", "Razón Social", "Descripción", "Subtotal", "IGV", "Total"];
     const rows = clientExpenses.map(exp => {
@@ -391,7 +446,7 @@ export const AccountantDashboard: React.FC = () => {
               ) : (
                 <div className="divide-y divide-gray-100 max-h-64 overflow-y-auto">
                   {clientDocs.map(doc => (
-                    <div key={doc.id} className="p-4 flex items-center justify-between hover:bg-gray-50">
+                    <div key={doc.id} onClick={() => setPreviewDoc(doc)} className="p-4 flex items-center justify-between hover:bg-gray-50 cursor-pointer">
                       <div className="flex items-center gap-3">
                         <div className="p-2 bg-blue-50 rounded-lg">
                           <ReceiptText className="w-4 h-4 text-blue-600" />
@@ -441,6 +496,87 @@ export const AccountantDashboard: React.FC = () => {
               <p className="text-xl font-black text-gray-800">{filteredExpenses.length}</p>
             </div>
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ─── Modal: Previsualización de Documento ───
+  const renderDocPreviewModal = () => {
+    if (!previewDoc) return null;
+    const client = users.find(u => u.id === previewDoc.userId);
+    return (
+      <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 p-4 overflow-y-auto" onClick={() => setPreviewDoc(null)}>
+        <div className="bg-white rounded-[2rem] w-full max-w-2xl h-fit overflow-hidden flex flex-col shadow-2xl relative" onClick={e => e.stopPropagation()}>
+          <div className="p-6 border-b flex justify-between items-center bg-gray-50">
+            <div className="flex items-center gap-3 min-w-0">
+              <h3 className="text-sm font-black uppercase tracking-widest text-gray-800 italic truncate">{previewDoc.name}</h3>
+              {previewDoc.uploadedBy === 'ACCOUNTANT' && (
+                <span className="shrink-0 text-[9px] bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full font-black uppercase flex items-center"><UserIcon className="w-3 h-3 mr-1"/> Enviado por contador</span>
+              )}
+            </div>
+            <button onClick={() => setPreviewDoc(null)} className="p-2 bg-white rounded-full hover:bg-gray-100 transition shadow-sm shrink-0"><X className="w-6 h-6 text-gray-400"/></button>
+          </div>
+          <div className="p-10 flex-1 bg-white">
+            <div className="border-4 border-gray-100 p-8 rounded-3xl space-y-8 relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none rotate-12">
+                <ShieldCheck className="w-40 h-40" />
+              </div>
+              <div className="flex justify-between border-b-2 border-brand-500 pb-4 relative z-10">
+                <h1 className="text-xl font-black text-brand-600 uppercase italic">Control Tributario</h1>
+                <div className="text-right">
+                  <p className="text-[10px] font-black uppercase text-gray-400 leading-none">RUC Cliente</p>
+                  <p className="text-sm font-mono font-black text-gray-800">{client?.ruc || '—'}</p>
+                </div>
+              </div>
+              <div className="space-y-6 relative z-10 font-bold text-gray-700">
+                <div className="grid grid-cols-2 gap-8 text-xs">
+                  <div><p className="text-gray-400 font-bold uppercase text-[9px] mb-1">Periodo:</p><p className="font-black text-gray-800 uppercase text-sm">{previewDoc.periodMonth} {previewDoc.periodYear}</p></div>
+                  <div><p className="text-gray-400 font-bold uppercase text-[9px] mb-1">Subido:</p><p className="font-black text-gray-800 uppercase text-sm">{previewDoc.uploadDate}</p></div>
+                </div>
+                {previewDoc.metadata && (
+                  <div className="p-6 bg-brand-50/50 rounded-2xl border-2 border-brand-100 space-y-4">
+                    <div className="border-b border-brand-100 pb-2 flex justify-between items-center">
+                      <p className="text-[10px] font-black text-brand-700 uppercase">Detalle del Comprobante</p>
+                      <span className="text-[9px] font-black text-gray-400">{previewDoc.metadata.recipientRuc}</span>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-black text-gray-900 uppercase">{previewDoc.metadata.recipientName}</p>
+                      <p className="text-[10px] text-gray-600 italic">"{previewDoc.metadata.description}"</p>
+                    </div>
+                    <div className="pt-4 border-t border-brand-100 flex justify-between items-end">
+                      <div>
+                        {previewDoc.metadata.retention > 0 && <p className="text-[9px] text-red-500 font-bold">Retención: S/ {previewDoc.metadata.retention.toFixed(2)}</p>}
+                        <p className="text-[9px] text-gray-400 font-bold uppercase">Monto Total</p>
+                      </div>
+                      <p className="text-xl font-black text-brand-700">S/ {previewDoc.metadata.amount.toFixed(2)}</p>
+                    </div>
+                  </div>
+                )}
+                {previewDoc.fileUrl && (
+                  <div className="p-8 bg-gray-50 rounded-2xl border border-gray-100 text-center">
+                    <p className="text-xs text-gray-500 italic mb-4">Archivo adjunto disponible para descargar</p>
+                  </div>
+                )}
+                {previewDoc.sunatHash && (
+                  <div className="pt-4 border-t border-gray-200">
+                    <p className="text-[8px] text-gray-400 uppercase font-black tracking-widest">Firma Digital (CPE):</p>
+                    <p className="text-[9px] font-mono font-bold text-brand-600 break-all">{previewDoc.sunatHash}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          {previewDoc.fileUrl && (
+            <div className="p-6 border-t flex justify-center bg-gray-50">
+              <button
+                onClick={() => downloadFile(previewDoc.fileUrl, previewDoc.name, previewDoc.mimeType || 'application/octet-stream', true)}
+                className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-blue-700 transition flex items-center justify-center"
+              >
+                <Download className="w-4 h-4 mr-2"/> Descargar Archivo
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -810,9 +946,9 @@ export const AccountantDashboard: React.FC = () => {
                   <p className="text-[10px] text-gray-400">PDF, XML, JPG, PNG</p>
                 </div>
               )}
-              <input type="file" ref={docInputRef} className="hidden"
-                accept=".pdf,.xml,.jpg,.jpeg,.png" onChange={handleFileSelect} />
             </div>
+            <input type="file" ref={docInputRef} className="hidden"
+              accept=".pdf,.xml,.jpg,.jpeg,.png" onChange={handleFileSelect} />
           </div>
           <button onClick={() => {
             if (!targetClientId) return alert('Selecciona un cliente');
@@ -962,6 +1098,7 @@ export const AccountantDashboard: React.FC = () => {
       {renderContent()}
       {renderExpenseModal()}
       {renderCreateClientModal()}
+      {renderDocPreviewModal()}
     </div>
   );
 };

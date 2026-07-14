@@ -176,7 +176,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
       }
 
       // === FLUJO NORMAL (con envío a SUNAT) ===
-      const response = await fetch('http://localhost:5555/emitir-factura', {
+      const response = await fetch('/emitir-factura', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -208,7 +208,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
         try {
           const tipoDoc = data.documentType === 'factura' ? '01' : '03';
           const correlativoNum = parseInt(String(data.correlative).replace(/^0+/, ''), 10);
-          const cpeResp = await fetch('http://localhost:5555/consultar-cpe', {
+          const cpeResp = await fetch('/consultar-cpe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

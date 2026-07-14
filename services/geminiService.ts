@@ -1,5 +1,5 @@
 
-const API_URL = 'http://localhost:5555';
+const API_URL = '';
 
 // Helper to convert file to base64
 export const fileToBase64 = (file: File): Promise<string> => {
@@ -28,7 +28,7 @@ export interface ReceiptData {
 }
 
 export const analyzeReceipt = async (base64Image: string, mimeType: string): Promise<ReceiptData> => {
-  const response = await fetch(`${API_URL}/analizar-recibo`, {
+  const response = await fetch(`/analizar-recibo`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ base64Image, mimeType })

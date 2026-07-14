@@ -50,6 +50,8 @@ export interface TaxDocument {
   periodYear: number;
   sunatStatus?: 'PENDING' | 'SENT' | 'REJECTED' | 'INTERNO';
   sunatHash?: string;
+  // Origen del documento: 'ACCOUNTANT' (subido por el contador) | 'USER' (emitido/archivado por el usuario)
+  uploadedBy?: 'ACCOUNTANT' | 'USER';
   pdfUrl?: string;
   xmlUrl?: string;
   cdrUrl?: string;
@@ -120,10 +122,11 @@ export interface SubscriptionRecord {
 
 export interface AdminNotification {
   id: string;
+  userId?: string;
   message: string;
   date: string;
   isRead: boolean;
-  type: 'SUBSCRIPTION' | 'SYSTEM';
+  type: 'SUBSCRIPTION' | 'SYSTEM' | 'ACCOUNTANT_DOC';
 }
 export interface Complaint {
   id: string;
