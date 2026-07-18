@@ -2,10 +2,21 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const SunatEngine = require('./sunat-engine');
+const { initSchema } = require('./db-schema');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+
+// Initialize database schema and seed on startup
+initSchema().then(() => {
+  const { seed } = require('./seed');
+  return seed();
+}).catch(err => console.error('DB init error:', err));
+
+// API Routes (CRUD)
+const apiRoutes = require('./api-routes');
+app.use('/api', apiRoutes);
 
 // Logger Universal
 app.use((req, res, next) => {

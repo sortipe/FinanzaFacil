@@ -27,6 +27,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'complaints'>('users');
+  const [subFilter, setSubFilter] = useState<'all' | SubscriptionStatus>('all');
   const [showNotifications, setShowNotifications] = useState(false);
 
   // --- SETTINGS STATES ---
@@ -237,7 +238,15 @@ export const AdminDashboard: React.FC = () => {
 
       {activeTab === 'users' ? (
         <div className="space-y-4">
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex bg-gray-50 p-1 rounded-xl">
+              {[{ key: 'all', label: 'Todos' }, { key: SubscriptionStatus.ACTIVE, label: 'Activos' }, { key: SubscriptionStatus.EXPIRED, label: 'Vencidos' }, { key: SubscriptionStatus.PENDING, label: 'Pendientes' }].map(f => (
+                <button key={f.key} onClick={() => setSubFilter(f.key as any)}
+                  className={`px-4 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${subFilter === f.key ? 'bg-white text-brand-600 shadow-sm border border-brand-100' : 'text-gray-400'}`}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
             <button onClick={handleOpenCreateUser} className="bg-brand-600 text-white px-6 py-3 rounded-2xl hover:bg-brand-700 transition flex items-center font-black text-xs uppercase tracking-widest shadow-xl active:scale-95">
               <UserPlus className="w-4 h-4 mr-2" /> Nuevo Registro
             </button>
@@ -256,7 +265,7 @@ export const AdminDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {users.map(user => (
+                  {users.filter(u => subFilter === 'all' || u.subscriptionStatus === subFilter).map(user => (
                     <tr key={user.id} className="hover:bg-gray-50 transition">
                       <td className="px-6 py-4">
                         <div className="flex items-center space-x-3">
@@ -283,7 +292,7 @@ export const AdminDashboard: React.FC = () => {
                       <td className="px-6 py-4">
                         {user.role === UserRole.USER && (
                           <div className="flex items-center space-x-2">
-                            <span className={`w-2 h-2 rounded-full ${user.subscriptionStatus === SubscriptionStatus.ACTIVE ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                            <span className={`w-2 h-2 rounded-full ${user.subscriptionStatus === SubscriptionStatus.ACTIVE ? 'bg-green-500' : user.subscriptionStatus === SubscriptionStatus.EXPIRED ? 'bg-red-500' : 'bg-yellow-500'}`}></span>
                             <span className="text-[10px] font-black uppercase text-gray-600">{user.subscriptionStatus}</span>
                           </div>
                         )}

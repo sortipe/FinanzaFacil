@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
-import { Expense, TaxDocument } from '../types';
+import { Expense, TaxDocument, PendingInvoice, UserRole, SubscriptionStatus } from '../types';
 import { Plus, Camera, Loader2, DollarSign, Search, Calendar, Tag, Image as ImageIcon, X, Clock, PieChart as PieChartIcon, BarChart as BarChartIcon, Upload, RefreshCw, Sparkles, Save, Hash, FileText, User, ShieldCheck, Lock, Eye, EyeOff, Download, ChevronDown, FileSpreadsheet, History, DownloadCloud, ExternalLink, PlusCircle, MessageCircleMore, Headphones, TrendingUp, TrendingDown, CalendarDays, CalendarRange, FileInput, ReceiptText, Printer, CheckCircle2, ArrowLeft, Globe, AlertTriangle, ExternalLink as ExtIcon, ShoppingBag, Briefcase, Users, HelpCircle } from 'lucide-react';
 import { analyzeReceipt, fileToBase64 } from '../services/geminiService';
 import { sunatService } from '../services/sunatService';
@@ -9,18 +9,123 @@ import { consultaService } from '../services/consultaService';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
 import { SunatSettings } from '../components/SunatSettings';
 import { InvoiceWizard } from '../components/InvoiceWizard';
+import { Payment } from '../pages/Payment';
 
 
 export const UserDashboard: React.FC = () => {
-  const { currentUser, expenses, taxDocuments, addExpense, addTaxDocument, sunatGlobalConfig } = useStore();
+  const { currentUser, expenses, taxDocuments, addExpense, addTaxDocument, sunatGlobalConfig, pendingInvoices, removePendingInvoice, updatePendingInvoiceStatus, users, registerUser, updateUser, generatePassword, subscriptionHistory } = useStore();
   const [isUploading, setIsUploading] = useState(false);
-  const [activeView, setActiveView] = useState<'dashboard' | 'settings'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'settings' | 'history'>('dashboard');
   const [showReceiptModal, setShowReceiptModal] = useState(false);
 
   const [analyzing, setAnalyzing] = useState(false);
   const [aiError, setAiError] = useState('');
   const [docFilter, setDocFilter] = useState<'all' | 'rh' | 'factura' | 'pdt' | 'contador'>('all');
   const [previewDoc, setPreviewDoc] = useState<TaxDocument | null>(null);
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [showPayment, setShowPayment] = useState(false);
+  const [showCreateAccountant, setShowCreateAccountant] = useState(false);
+  const [accForm, setAccForm] = useState({ name: '', email: '' });
+  const [accPwd, setAccPwd] = useState('');
+  const [creatingAcc, setCreatingAcc] = useState(false);
+  const [accCreated, setAccCreated] = useState(false);
+  const [showAccPwd, setShowAccPwd] = useState(false);
+
+  const retryPendingInvoice = async (inv: PendingInvoice) => {
+    setRetrying(inv.id);
+    updatePendingInvoiceStatus(inv.id, 'ENVIANDO');
+    try {
+      const response = await fetch('/emitir-factura', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(inv.payload)
+      });
+      const result = await response.json();
+      if (result.success) {
+        updatePendingInvoiceStatus(inv.id, 'ACEPTADO');
+        const paddedCorr = typeof inv.correlative === 'number' ? String(inv.correlative).padStart(8, '0') : '00000001';
+        addTaxDocument({
+          id: inv.id,
+          userId: inv.userId,
+          accountantId: '',
+          name: `${inv.documentType === 'factura' ? 'F' : 'B'}${inv.serie}-${paddedCorr}`,
+          fileUrl: '',
+          pdfUrl: '',
+          xmlUrl: result.xmlContent ? URL.createObjectURL(new Blob([result.xmlContent], { type: 'text/xml' })) : '',
+          cdrUrl: result.cdrBase64 ? URL.createObjectURL(new Blob([Uint8Array.from(atob(result.cdrBase64), c => c.charCodeAt(0))], { type: 'application/zip' })) : '',
+          xmlContent: result.xmlContent,
+          cdrBase64: result.cdrBase64,
+          mimeType: 'application/xml',
+          uploadDate: new Date().toISOString().split('T')[0],
+          periodMonth: new Date().toLocaleDateString('es-ES', { month: 'long' }),
+          periodYear: new Date().getFullYear(),
+          sunatStatus: 'SENT',
+          sunatHash: Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join('')
+        });
+        addExpense({
+          id: `exp-${inv.id}-${Date.now()}`,
+          userId: inv.userId,
+          amount: inv.amount,
+          currency: 'PEN',
+          description: inv.customerName ? `${inv.id} - ${inv.customerName}` : inv.id,
+          date: new Date().toISOString().split('T')[0],
+          category: 'Facturación Electrónica',
+          invoiceNumber: inv.id,
+          isPrivate: false
+        });
+      } else {
+        updatePendingInvoiceStatus(inv.id, 'PENDIENTE', result.error || 'Error del servidor SUNAT');
+      }
+    } catch (err: any) {
+      updatePendingInvoiceStatus(inv.id, 'PENDIENTE', 'Error de conexión: ' + (err.message || 'Desconocido'));
+    } finally { setRetrying(null); }
+  };
+
+  const retryAllPending = async () => {
+    const pending = pendingInvoices.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE');
+    for (const inv of pending) {
+      await retryPendingInvoice(inv);
+    }
+  };
+
+  const handleCreateAccountant = async () => {
+    if (!accForm.name.trim() || !accForm.email.trim()) return;
+    setCreatingAcc(true);
+    const pwd = accPwd || generatePassword();
+    const newUser = {
+      id: Date.now().toString(),
+      name: accForm.name.trim(),
+      email: accForm.email.trim(),
+      role: UserRole.ACCOUNTANT,
+      password: pwd,
+      mustChangePassword: true
+    };
+    registerUser(newUser);
+    if (currentUser) {
+      updateUser(currentUser.id, { assignedAccountantId: newUser.id });
+    }
+    fetch('/api/send-welcome-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: newUser.email, name: newUser.name, password: pwd })
+    }).catch(() => {});
+    setAccPwd(pwd);
+    setAccCreated(true);
+    setCreatingAcc(false);
+  };
+
+  const pendingRef = useRef(pendingInvoices);
+  pendingRef.current = pendingInvoices;
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const pendings = pendingRef.current.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE' && p.attemptCount < 5);
+      if (pendings.length > 0) {
+        pendings.forEach(inv => retryPendingInvoice(inv));
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [currentUser?.id]);
   
   const downloadFile = (content: string, filename: string, type: string, isBase64: boolean = false) => {
     try {
@@ -479,6 +584,12 @@ export const UserDashboard: React.FC = () => {
           >
             <ShieldCheck className="w-5 h-5" />
           </button>
+          <button 
+            onClick={() => setActiveView(activeView === 'history' ? 'dashboard' : 'history')} 
+            className={`p-3 rounded-2xl transition shadow-lg flex items-center justify-center active:scale-95 ${activeView === 'history' ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 border border-gray-100'}`}
+          >
+            <History className="w-5 h-5" />
+          </button>
         </div>
       </header>
 
@@ -488,6 +599,38 @@ export const UserDashboard: React.FC = () => {
              <ArrowLeft className="w-4 h-4" /> Volver al Dashboard
            </button>
            <SunatSettings />
+        </div>
+      ) : activeView === 'history' ? (
+        <div className="animate-fade-in-up">
+          <button onClick={() => setActiveView('dashboard')} className="mb-6 flex items-center gap-2 text-sm font-bold text-gray-500 hover:text-gray-800 transition">
+            <ArrowLeft className="w-4 h-4" /> Volver al Dashboard
+          </button>
+          <div className="bg-white rounded-3xl border border-brand-100 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-gray-100">
+              <h3 className="font-black text-gray-800 flex items-center text-xs uppercase tracking-widest"><History className="w-5 h-5 mr-2 text-brand-600" /> Historial de Suscripciones</h3>
+            </div>
+            <div className="p-4 space-y-2 max-h-[500px] overflow-y-auto">
+              {subscriptionHistory.filter(s => s.userId === currentUser?.id).length === 0 ? (
+                <div className="py-10 text-center text-gray-400 text-[10px] font-bold uppercase tracking-widest">Sin registros</div>
+              ) : (
+                subscriptionHistory.filter(s => s.userId === currentUser?.id).map(rec => (
+                  <div key={rec.id} className="px-4 py-3 rounded-xl border border-gray-100 bg-gray-50/50 flex items-center gap-4">
+                    <div className="p-2.5 rounded-xl bg-brand-50"><FileText className="w-4 h-4 text-brand-600"/></div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-black text-gray-900 truncate uppercase">{rec.packageName}</p>
+                      <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">
+                        {rec.date} · S/ {rec.amount.toFixed(2)}
+                        {rec.startDate && rec.endDate && ` · ${rec.startDate} → ${rec.endDate}`}
+                      </p>
+                    </div>
+                    <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase shrink-0 ${rec.status === 'PAID' ? 'bg-green-100 text-green-700' : rec.status === 'PENDING' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                      {rec.status === 'PAID' ? 'Pagado' : rec.status === 'PENDING' ? 'Pendiente' : 'Cancelado'}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       ) : (
         <>
@@ -654,19 +797,74 @@ export const UserDashboard: React.FC = () => {
            <p className="text-[9px] mt-2 opacity-80 uppercase font-bold">Sin observaciones pendientes</p>
         </div>
         
-        {/* BOTÓN DE SOPORTE - WHATSAPP */}
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col justify-between relative group cursor-pointer" onClick={() => window.open('https://wa.me/51999888777', '_blank')}>
-           <div className="absolute top-4 right-4 text-green-500 animate-pulse"><MessageCircleMore className="w-6 h-6"/></div>
-           <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Asesoría Directa</p>
-           <div className="flex items-center space-x-3 mt-4">
-              <div className="p-3 bg-green-50 rounded-2xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-all"><Headphones className="w-6 h-6"/></div>
-              <div>
-                <p className="text-xs font-black text-gray-800 uppercase leading-tight">¿Dudas con tus impuestos?</p>
-                <p className="text-[10px] text-green-600 font-bold uppercase tracking-tighter">Hablar con mi contador</p>
-              </div>
-           </div>
+        {/* BOTÓN DE SOPORTE - WHATSAPP / CONTADOR */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col justify-between relative group">
+          {(() => {
+            const myAccountant = users.find(u => u.id === currentUser?.assignedAccountantId);
+            return myAccountant ? (
+              <>
+                <div className="absolute top-4 right-4 text-green-500"><MessageCircleMore className="w-6 h-6"/></div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Tu Contador</p>
+                <div className="flex items-center space-x-3 mt-4">
+                  <div className="p-3 bg-brand-50 rounded-2xl text-brand-600"><User className="w-6 h-6"/></div>
+                  <div>
+                    <p className="text-xs font-black text-gray-800 uppercase leading-tight">{myAccountant.name}</p>
+                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">{myAccountant.email}</p>
+                  </div>
+                </div>
+                <button onClick={() => window.open('https://wa.me/51999888777', '_blank')}
+                  className="mt-4 w-full py-2 bg-green-50 text-green-700 rounded-xl text-[10px] font-black uppercase hover:bg-green-100 transition flex items-center justify-center gap-2">
+                  <MessageCircleMore className="w-4 h-4" /> WhatsApp
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Contador</p>
+                <div className="flex items-center space-x-3 mt-4">
+                  <div className="p-3 bg-gray-100 rounded-2xl text-gray-400"><User className="w-6 h-6"/></div>
+                  <div>
+                    <p className="text-xs font-black text-gray-800 uppercase leading-tight">Sin contador asignado</p>
+                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Crea uno ahora</p>
+                  </div>
+                </div>
+                <button onClick={() => { setAccForm({ name: '', email: '' }); setAccPwd(generatePassword()); setAccCreated(false); setShowCreateAccountant(true); }}
+                  className="mt-4 w-full py-2 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition flex items-center justify-center gap-2 shadow-sm">
+                  <Plus className="w-4 h-4" /> Crear Contador
+                </button>
+              </>
+            );
+          })()}
         </div>
       </div>
+
+      {/* SUSCRIPCIÓN */}
+      {currentUser && (
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-brand-100 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-2xl bg-brand-50"><CalendarDays className="w-6 h-6 text-brand-600"/></div>
+            <div>
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Suscripción</p>
+              <p className="text-sm font-black text-gray-900">
+                {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE ? (
+                  <>Activa hasta el {currentUser.subscriptionEndDate ? new Date(currentUser.subscriptionEndDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</>
+                ) : currentUser.subscriptionStatus === SubscriptionStatus.EXPIRED ? (
+                  <span className="text-red-600">Vencida</span>
+                ) : (
+                  <span className="text-amber-600">Pendiente de pago</span>
+                )}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setShowPayment(true)} className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition shadow-sm flex items-center gap-2">
+              <Sparkles className="w-4 h-4" /> {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE ? 'Renovar' : 'Comprar Plan'}
+            </button>
+            <button onClick={() => setActiveView('history')} className="px-5 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-[10px] font-black uppercase hover:bg-gray-200 transition flex items-center gap-2">
+              <History className="w-4 h-4" /> Historial
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* MOVIMIENTOS RECIENTES */}
@@ -693,6 +891,46 @@ export const UserDashboard: React.FC = () => {
             {myExpenses.length === 0 && <div className="py-20 text-center text-gray-400 text-xs italic">No hay movimientos registrados.</div>}
           </div>
         </div>
+
+        {/* PENDIENTES POR ENVIAR A SUNAT */}
+        {currentUser && pendingInvoices.filter(p => p.userId === currentUser.id && p.status !== 'ACEPTADO').length > 0 && (
+          <div className="bg-white rounded-3xl border-2 border-amber-200 shadow-sm overflow-hidden flex flex-col h-fit">
+            <div className="p-5 border-b border-amber-100 bg-amber-50/50">
+              <div className="flex items-center justify-between">
+                <h3 className="font-black text-gray-800 flex items-center text-xs uppercase tracking-widest"><Clock className="w-5 h-5 mr-2 text-amber-600" /> Pendientes SUNAT</h3>
+                <button type="button" onClick={retryAllPending}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-[10px] font-black uppercase hover:bg-amber-700 transition shadow-sm">
+                  <RefreshCw className="w-3 h-3" /> Reintentar Todo
+                </button>
+              </div>
+            </div>
+            <div className="p-4 space-y-2 max-h-[320px] overflow-y-auto">
+              {pendingInvoices.filter(p => p.userId === currentUser.id && p.status !== 'ACEPTADO').map(inv => (
+                <div key={inv.id} className="px-3 py-3 rounded-xl border border-amber-100 bg-amber-50/30 flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-white border border-amber-200 shrink-0"><Clock className="w-4 h-4 text-amber-600"/></div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-black text-gray-900 truncate uppercase tracking-tighter leading-none">{inv.serie}-{String(inv.correlative).padStart(8, '0')}</p>
+                    <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">{inv.customerName} · S/ {inv.amount.toFixed(2)}</p>
+                    {inv.lastError && <p className="text-[7px] font-bold text-red-400 mt-0.5 truncate">{inv.lastError}</p>}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {inv.status === 'ENVIANDO' ? (
+                      <Loader2 className="w-4 h-4 text-amber-600 animate-spin" />
+                    ) : (
+                      <>
+                        <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase ${inv.status === 'PENDIENTE' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{inv.status}</span>
+                        <button type="button" onClick={() => retryPendingInvoice(inv)} disabled={retrying === inv.id}
+                          className="p-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition disabled:opacity-50">
+                          <RefreshCw className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* BUZÓN TRIBUTARIO (PDT Y RH POR MES) */}
         <div className="bg-white rounded-3xl border border-brand-100 shadow-sm overflow-hidden flex flex-col h-fit">
@@ -882,6 +1120,72 @@ export const UserDashboard: React.FC = () => {
         />
       )}
 
+      {/* MODAL CREAR CONTADOR */}
+      {showCreateAccountant && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-[2rem] w-full max-w-md overflow-hidden flex flex-col shadow-2xl relative">
+            <div className="p-6 border-b flex justify-between items-center bg-gray-50">
+              <h3 className="text-sm font-black uppercase tracking-widest text-gray-800 italic">
+                {accCreated ? 'Contador Creado' : 'Crear Contador'}
+              </h3>
+              <button onClick={() => setShowCreateAccountant(false)} className="p-2 bg-white rounded-full hover:bg-gray-100 transition shadow-sm"><X className="w-5 h-5 text-gray-400"/></button>
+            </div>
+            {accCreated ? (
+              <div className="p-8 text-center space-y-4">
+                <div className="p-4 bg-green-100 rounded-full w-fit mx-auto"><CheckCircle2 className="w-10 h-10 text-green-600"/></div>
+                <p className="font-black text-gray-800 text-lg">{accForm.name}</p>
+                <p className="text-xs text-gray-500">{accForm.email}</p>
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-left space-y-1">
+                  <p className="text-[10px] font-black text-amber-700 uppercase">Contraseña generada</p>
+                  <p className="text-sm font-mono font-black text-gray-800 select-all">{accPwd}</p>
+                </div>
+                <p className="text-[10px] text-gray-400 font-bold">Se ha enviado un correo de bienvenida con las credenciales.</p>
+                <button onClick={() => setShowCreateAccountant(false)}
+                  className="w-full py-3 bg-brand-600 text-white rounded-xl font-black uppercase text-xs tracking-widest hover:bg-brand-700 transition shadow-sm">
+                  Cerrar
+                </button>
+              </div>
+            ) : (
+              <div className="p-6 space-y-5">
+                <div>
+                  <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Nombre del Contador</label>
+                  <input type="text" placeholder="Ej: Carlos Contreras"
+                    className="w-full border-2 border-gray-200 p-3 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600"
+                    value={accForm.name} onChange={e => setAccForm(p => ({ ...p, name: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Correo Electrónico</label>
+                  <input type="email" placeholder="correo@ejemplo.com"
+                    className="w-full border-2 border-gray-200 p-3 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600"
+                    value={accForm.email} onChange={e => setAccForm(p => ({ ...p, email: e.target.value }))} />
+                </div>
+                <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                  <p className="text-[8px] font-black text-gray-400 uppercase">Contraseña</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="flex-1 relative">
+                      <input type={showAccPwd ? 'text' : 'password'} readOnly
+                        className="w-full bg-white border border-gray-200 p-2 rounded-lg text-xs font-mono font-bold text-gray-800 pr-8"
+                        value={accPwd} />
+                      <button type="button" onClick={() => setShowAccPwd(s => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                        {showAccPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <button onClick={() => setAccPwd(generatePassword())} className="p-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition shrink-0" title="Generar nueva">
+                      <RefreshCw className="w-4 h-4 text-gray-600" />
+                    </button>
+                  </div>
+                </div>
+                <button onClick={handleCreateAccountant} disabled={creatingAcc || !accForm.name.trim() || !accForm.email.trim()}
+                  className="w-full py-3 bg-brand-600 text-white rounded-xl font-black uppercase text-xs tracking-widest shadow-sm hover:bg-brand-700 transition disabled:opacity-50 flex items-center justify-center gap-2">
+                  {creatingAcc ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  {creatingAcc ? 'Creando...' : 'Crear Contador'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* PREVISUALIZACIÓN DE DOCUMENTO ARCHIVADO */}
       {previewDoc && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/95 p-4 overflow-y-auto">
@@ -978,6 +1282,18 @@ export const UserDashboard: React.FC = () => {
                  </div>
               </div>
            </div>
+        </div>
+      )}
+
+      {showPayment && (
+        <div className="fixed inset-0 z-[120] bg-white overflow-y-auto">
+          <div className="sticky top-0 z-10 bg-white border-b p-4 flex justify-between items-center">
+            <h2 className="font-black text-sm uppercase tracking-widest">Planes de Suscripción</h2>
+            <button onClick={() => setShowPayment(false)} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200 transition"><X className="w-5 h-5"/></button>
+          </div>
+          <div className="max-w-4xl mx-auto">
+            <Payment />
+          </div>
         </div>
       )}
     </div>

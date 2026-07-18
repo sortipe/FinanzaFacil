@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
 import { consultaService } from '../services/consultaService';
-import { InvoiceItem } from '../types';
+import { InvoiceItem, UserProduct } from '../types';
 import {
   X, User, Search, Loader2, FileText, Calendar, DollarSign,
   CheckCircle2, AlertTriangle, Plus, Trash2, Eye, ArrowLeft,
@@ -70,7 +70,7 @@ interface Props {
 }
 
 export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
-  const { currentUser, sunatGlobalConfig } = useStore();
+  const { currentUser, sunatGlobalConfig, userProducts, addUserProduct, addPendingInvoice, removeUserProduct } = useStore();
   const [step, setStep] = useState(0);
   const [data, setData] = useState<WizardData>(() => {
     const userId = currentUser?.id;
@@ -87,6 +87,8 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
   const [verificando, setVerificando] = useState(false);
   const [consultaCpe, setConsultaCpe] = useState<{success: boolean; statusCode: string; description: string; raw: string} | null>(null);
   const [success, setSuccess] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState<{ idx: number; filter: string }>({ idx: -1, filter: '' });
+  const suggestionRef = useRef<HTMLDivElement>(null);
 
   const extractCdrStatus = (soapXml: string): {code: string; description: string} | null => {
     try {
@@ -154,6 +156,24 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
         env: 'PRODUCTION'
       }
     };
+
+    const buildPendingInvoice = (errorMsg: string) => ({
+      id: `${data.serie}-${typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001'}`,
+      userId: currentUser?.id || 'unknown',
+      serie: data.serie,
+      correlative: typeof data.correlative === 'number' ? data.correlative : 0,
+      documentType: data.documentType,
+      payload,
+      customerDocType: data.customerDocType,
+      customerDocNumber: data.customerDocNumber,
+      customerName: data.customerName,
+      amount: total,
+      createdAt: new Date().toISOString(),
+      lastAttempt: new Date().toISOString(),
+      attemptCount: 0,
+      status: 'PENDIENTE' as const,
+      lastError: errorMsg
+    });
 
     try {
       if (!data.sendToSunat) {
@@ -229,9 +249,12 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
       } else {
         setError(result.error || 'Error del servidor SUNAT');
         if (result.sunatResponse) setSunatResponse(result.sunatResponse);
+        addPendingInvoice(buildPendingInvoice(result.error || 'Error del servidor SUNAT'));
       }
     } catch (err: any) {
-      setError('Error de conexión: ' + (err.message || 'Desconocido'));
+      const errorMsg = 'Error de conexión: ' + (err.message || 'Desconocido');
+      setError(errorMsg);
+      addPendingInvoice(buildPendingInvoice(errorMsg));
     } finally { setEmitting(false); }
   };
 
@@ -242,7 +265,18 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
     return true;
   };
 
-  const next = () => { if (canGoNext()) { setStep(s => s + 1); setError(''); } };
+  const next = () => {
+    if (!canGoNext()) return;
+    if (step === 2) {
+      data.items.forEach(item => {
+        if (item.description.trim()) {
+          addUserProduct({ description: item.description.trim(), unit: item.unit, unitPrice: item.unitPrice });
+        }
+      });
+    }
+    setStep(s => s + 1);
+    setError('');
+  };
   const prev = () => { setStep(s => s - 1); setError(''); };
 
   const addItem = () => setData(prev => ({
@@ -256,7 +290,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
     if (partial.unitPrice !== undefined || partial.quantity !== undefined) {
       const unitPrice = partial.unitPrice ?? items[idx].unitPrice;
       const qty = partial.quantity ?? items[idx].quantity;
-      items[idx].total = parseFloat((unitPrice * qty * 1.18).toFixed(2));
+      items[idx].total = parseFloat((unitPrice * qty).toFixed(2));
     }
     return { ...prev, items };
   });
@@ -266,7 +300,25 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
   }));
 
   const totalGeneral = data.items.reduce((s, i) => s + i.total, 0);
-  const totalGravada = data.items.reduce((s, i) => s + (i.unitPrice * i.quantity), 0);
+  const totalGravada = parseFloat((totalGeneral / 1.18).toFixed(2));
+
+  const userProductSuggestions = useMemo(() => {
+    if (activeSuggestion.idx < 0 || !activeSuggestion.filter) return [];
+    const filter = activeSuggestion.filter.toLowerCase();
+    return (userProducts || []).filter(p =>
+      p.userId === currentUser?.id && p.description.toLowerCase().includes(filter)
+    ).slice(0, 6);
+  }, [activeSuggestion, userProducts, currentUser?.id]);
+
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (suggestionRef.current && !suggestionRef.current.contains(e.target as Node)) {
+        setActiveSuggestion({ idx: -1, filter: '' });
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
   const totalIgv = totalGeneral - totalGravada;
 
   return (
@@ -502,10 +554,15 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                 <div className="space-y-5">
                   <div className="flex items-center justify-between">
                     <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider">Detalle de Items</h4>
-                    <button type="button" onClick={addItem}
-                      className="flex items-center gap-1 px-3 py-2 bg-brand-100 text-brand-700 rounded-lg text-[10px] font-black uppercase hover:bg-brand-200 transition">
-                      <Plus className="w-3 h-3" /> Agregar Item
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {currentUser && userProducts?.filter(p => p.userId === currentUser.id).length > 0 && (
+                        <span className="text-[8px] font-black text-brand-600 bg-brand-50 px-2 py-1 rounded-lg">{userProducts.filter(p => p.userId === currentUser.id).length} productos guardados</span>
+                      )}
+                      <button type="button" onClick={addItem}
+                        className="flex items-center gap-1 px-3 py-2 bg-brand-100 text-brand-700 rounded-lg text-[10px] font-black uppercase hover:bg-brand-200 transition">
+                        <Plus className="w-3 h-3" /> Agregar Item
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-3">
                     {data.items.map((item, idx) => (
@@ -521,9 +578,9 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                         <div className="grid grid-cols-12 gap-2">
                           <div className="col-span-2">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Cant.</label>
-                            <input type="number" min={1} step={1} placeholder="1"
-                              className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
-                              value={item.quantity} onChange={e => updateItem(idx, { quantity: parseInt(e.target.value) || 0 })} />
+                             <input type="number" min={1} step={1} placeholder="1"
+                               className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
+                               value={item.quantity || ''} onChange={e => updateItem(idx, { quantity: e.target.value === '' ? 0 : parseInt(e.target.value) })} />
                           </div>
                           <div className="col-span-2">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Und.</label>
@@ -537,15 +594,58 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                           </div>
                           <div className="col-span-4">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Descripción</label>
-                            <input type="text" placeholder="Servicio / Producto"
-                              className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
-                              value={item.description} onChange={e => updateItem(idx, { description: e.target.value })} />
+                            <div className="relative">
+                              <input type="text" placeholder="Servicio / Producto"
+                                className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
+                                value={item.description}
+                                onChange={e => {
+                                  updateItem(idx, { description: e.target.value });
+                                  setActiveSuggestion({ idx, filter: e.target.value });
+                                }}
+                                onFocus={() => setActiveSuggestion({ idx, filter: item.description })}
+                                onKeyDown={e => {
+                                  const suggestions = userProductSuggestions;
+                                  if (!suggestions.length) return;
+                                  if (e.key === 'ArrowDown') {
+                                    e.preventDefault();
+                                    const next = ((activeSuggestion.filter === '__SELECTED__' ? -1 : 0) + 1) % (suggestions.length + 1) - 1;
+                                    if (next < 0) setActiveSuggestion({ idx, filter: '__SELECTED__' });
+                                    else setActiveSuggestion({ idx, filter: suggestions[next].description });
+                                  } else if (e.key === 'ArrowUp') {
+                                    e.preventDefault();
+                                    setActiveSuggestion({ idx, filter: '' });
+                                  } else if (e.key === 'Enter' && suggestions.length > 0 && activeSuggestion.filter !== item.description) {
+                                    e.preventDefault();
+                                    const selected = suggestions.find(s => s.description === activeSuggestion.filter) || suggestions[0];
+                                    updateItem(idx, { description: selected.description, unit: selected.unit, unitPrice: selected.unitPrice });
+                                    setActiveSuggestion({ idx: -1, filter: '' });
+                                  }
+                                }} />
+                              {activeSuggestion.idx === idx && userProductSuggestions.length > 0 && (
+                                <div ref={suggestionRef}
+                                  className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border-2 border-gray-200 rounded-xl shadow-xl max-h-44 overflow-y-auto">
+                                  {userProductSuggestions.map((p, si) => (
+                                    <div key={p.id} className={`flex items-center gap-1 px-3 py-2 text-xs font-bold hover:bg-brand-50 transition ${activeSuggestion.filter === p.description ? 'bg-brand-100' : ''}`}>
+                                      <button type="button" className="flex-1 text-left min-w-0"
+                                        onMouseDown={e => { e.preventDefault(); updateItem(idx, { description: p.description, unit: p.unit, unitPrice: p.unitPrice }); setActiveSuggestion({ idx: -1, filter: '' }); }}>
+                                        <span className="text-gray-900">{p.description}</span>
+                                        <span className="text-gray-400 ml-2">S/ {p.unitPrice.toFixed(2)}</span>
+                                      </button>
+                                      <button type="button" onMouseDown={e => { e.preventDefault(); removeUserProduct(p.id); }}
+                                        className="p-0.5 text-gray-300 hover:text-red-500 transition shrink-0">
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </div>
                           <div className="col-span-2">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">V. Unit.</label>
                             <input type="number" min={0} step={0.01} placeholder="0.00"
                               className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
-                              value={item.unitPrice} onChange={e => updateItem(idx, { unitPrice: parseFloat(e.target.value) || 0 })} />
+                              value={item.unitPrice || ''} onChange={e => updateItem(idx, { unitPrice: e.target.value === '' ? 0 : parseFloat(e.target.value) })} />
                           </div>
                           <div className="col-span-2">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Total</label>

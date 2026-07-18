@@ -1,28 +1,50 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { SubscriptionStatus } from '../types';
-import { Check, Smartphone, CheckCircle, QrCode } from 'lucide-react';
+import { Check, Smartphone, CheckCircle, QrCode, Calendar } from 'lucide-react';
 
 export const Payment: React.FC = () => {
-  const { packages, paymentMethods, currentUser, updateUserStatus, addNotification } = useStore();
+  const { packages, paymentMethods, currentUser, updateUser, addNotification, addSubscriptionRecord } = useStore();
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [expirationDate, setExpirationDate] = useState('');
 
   if (!currentUser) return null;
 
   const handlePayment = () => {
     const pkg = packages.find(p => p.id === selectedPackage);
-    
-    // Simulate API call delay
+    if (!pkg || !currentUser) return;
+
+    const startDate = new Date();
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + pkg.durationMonths);
+    const endStr = endDate.toISOString().split('T')[0];
+    setExpirationDate(endStr);
+
     setTimeout(() => {
       if (currentUser) {
-        updateUserStatus(currentUser.id, SubscriptionStatus.ACTIVE);
-        
-        // Notify Admin
+        updateUser(currentUser.id, {
+          subscriptionStatus: SubscriptionStatus.ACTIVE,
+          subscriptionStartDate: new Date().toISOString().split('T')[0],
+          subscriptionEndDate: endStr
+        });
+
+        addSubscriptionRecord({
+          id: Date.now().toString(),
+          userId: currentUser.id,
+          packageName: pkg.name,
+          amount: pkg.price,
+          date: new Date().toISOString().split('T')[0],
+          startDate: new Date().toISOString().split('T')[0],
+          endDate: endStr,
+          status: 'PAID',
+          paymentDetails: selectedMethod
+        });
+
         addNotification({
           id: Date.now().toString(),
-          message: `El usuario ${currentUser.name} se ha suscrito al ${pkg ? pkg.name : 'plan'}.`,
+          message: `El usuario ${currentUser.name} se ha suscrito al ${pkg.name}.`,
           date: new Date().toLocaleDateString('es-ES', { hour: '2-digit', minute: '2-digit' }),
           isRead: false,
           type: 'SUBSCRIPTION'
@@ -41,8 +63,14 @@ export const Payment: React.FC = () => {
           </div>
           <h2 className="text-2xl font-bold text-gray-900">¡Pago Exitoso!</h2>
           <p className="text-gray-600">Tu suscripción ha sido activada correctamente. Ahora puedes empezar a gestionar tus gastos.</p>
+          {expirationDate && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-center gap-2 text-sm">
+              <Calendar className="w-4 h-4 text-amber-600" />
+              <span className="font-bold text-amber-800">Vence el {new Date(expirationDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
+            </div>
+          )}
           <button 
-             onClick={() => window.location.reload()} // Force reload to trigger state check in App
+             onClick={() => window.location.reload()}
              className="w-full bg-brand-600 text-white font-bold py-3 rounded-xl hover:bg-brand-700 transition mt-6"
           >
             Ir al Dashboard
