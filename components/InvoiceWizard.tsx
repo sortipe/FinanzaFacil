@@ -304,10 +304,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
   }));
 
   const totalGeneral = data.items.reduce((s, i) => s + i.total, 0);
-  const totalGravada = data.items.reduce((s, i) => {
-    const up = typeof i.unitPrice === 'string' ? (parseFloat(i.unitPrice) || 0) : i.unitPrice;
-    return s + (up * i.quantity);
-  }, 0);
+  const totalGravada = parseFloat((totalGeneral / 1.18).toFixed(2));
   const totalIgv = totalGeneral - totalGravada;
 
   const userProductSuggestions = useMemo(() => {
