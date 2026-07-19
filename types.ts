@@ -75,7 +75,7 @@ export interface InvoiceItem {
   quantity: number;
   unit: string;
   description: string;
-  unitPrice: number;
+  unitPrice: number | string;
   total: number;
 }
 

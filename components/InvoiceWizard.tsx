@@ -140,7 +140,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
         items: data.items.map(i => ({
           description: i.description,
           quantity: i.quantity,
-          unitPrice: i.unitPrice,
+          unitPrice: typeof i.unitPrice === 'string' ? (parseFloat(i.unitPrice) || 0) : i.unitPrice,
           total: i.total
         })),
         total: total.toFixed(2),
@@ -261,7 +261,10 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
   const canGoNext = (): boolean => {
     if (step === 0) return !!data.customerDocNumber && !!data.customerName;
     if (step === 1) return !!data.serie && !!data.issueDate;
-    if (step === 2) return data.items.length > 0 && data.items.every(i => i.description && i.quantity > 0 && i.unitPrice >= 0);
+    if (step === 2) return data.items.length > 0 && data.items.every(i => {
+      const up = typeof i.unitPrice === 'string' ? (parseFloat(i.unitPrice) || 0) : i.unitPrice;
+      return i.description && i.quantity > 0 && up >= 0;
+    });
     return true;
   };
 
@@ -288,7 +291,8 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
     const items = [...prev.items];
     items[idx] = { ...items[idx], ...partial };
     if (partial.unitPrice !== undefined || partial.quantity !== undefined) {
-      const unitPrice = partial.unitPrice ?? items[idx].unitPrice;
+      const rawUnitPrice = partial.unitPrice ?? items[idx].unitPrice;
+      const unitPrice = typeof rawUnitPrice === 'string' ? (parseFloat(rawUnitPrice) || 0) : rawUnitPrice;
       const qty = partial.quantity ?? items[idx].quantity;
       items[idx].total = parseFloat((unitPrice * qty).toFixed(2));
     }
@@ -300,7 +304,11 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
   }));
 
   const totalGeneral = data.items.reduce((s, i) => s + i.total, 0);
-  const totalGravada = parseFloat((totalGeneral / 1.18).toFixed(2));
+  const totalGravada = data.items.reduce((s, i) => {
+    const up = typeof i.unitPrice === 'string' ? (parseFloat(i.unitPrice) || 0) : i.unitPrice;
+    return s + (up * i.quantity);
+  }, 0);
+  const totalIgv = totalGeneral - totalGravada;
 
   const userProductSuggestions = useMemo(() => {
     if (activeSuggestion.idx < 0 || !activeSuggestion.filter) return [];
@@ -319,7 +327,6 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
-  const totalIgv = totalGeneral - totalGravada;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 overflow-y-auto">
@@ -643,9 +650,37 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                           </div>
                           <div className="col-span-2">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">V. Unit.</label>
-                            <input type="number" min={0} step={0.01} placeholder="0.00"
+                            <input type="text" inputMode="decimal" placeholder="0.00"
                               className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
-                              value={item.unitPrice || ''} onChange={e => updateItem(idx, { unitPrice: e.target.value === '' ? 0 : parseFloat(e.target.value) })} />
+                              value={item.unitPrice}
+                              onChange={e => {
+                                let val = e.target.value;
+                                val = val.replace(/[^0-9.]/g, '');
+                                const parts = val.split('.');
+                                if (parts.length > 2) {
+                                  val = parts[0] + '.' + parts.slice(1).join('');
+                                }
+                                if (val === '.') {
+                                  val = '0.';
+                                }
+                                if (/^0[0-9]/.test(val)) {
+                                  val = val.replace(/^0+/, '');
+                                  if (val.startsWith('.')) {
+                                    val = '0' + val;
+                                  }
+                                }
+                                if (val === '00') {
+                                  val = '0';
+                                }
+                                updateItem(idx, { unitPrice: val });
+                              }}
+                              onBlur={() => {
+                                if (item.unitPrice === '' || item.unitPrice === '.') {
+                                  updateItem(idx, { unitPrice: 0 });
+                                } else {
+                                  updateItem(idx, { unitPrice: parseFloat(String(item.unitPrice)) || 0 });
+                                }
+                              }} />
                           </div>
                           <div className="col-span-2">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Total</label>
@@ -706,7 +741,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                     {emitting ? (
                       <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Emitiendo...</>
                     ) : data.sendToSunat ? (
-                      <><Globe className="w-4 h-4 mr-2" /> Emitir Oficialmente a SUNAT</>
+                      <><Globe className="w-4 h-4 mr-2" /> Emitir</>
                     ) : (
                       <><FileText className="w-4 h-4 mr-2" /> Emitir como Interno (sin SUNAT)</>
                     )}

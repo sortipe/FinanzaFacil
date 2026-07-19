@@ -133,7 +133,7 @@ router.delete('/tax-documents/:id', async (req, res) => {
 router.get('/packages', async (req, res) => {
   try {
     const rows = await db.query('SELECT * FROM packages ORDER BY created_at ASC');
-    const parsed = rows.map(r => ({ ...r, features: r.features ? (typeof r.features === 'string' ? JSON.parse(r.features) : r.features) : [] }));
+    const parsed = rows.map(r => ({ ...r, durationMonths: r.duration_months, features: r.features ? (typeof r.features === 'string' ? JSON.parse(r.features) : r.features) : [] }));
     res.json(parsed);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
