@@ -287,15 +287,6 @@ export const Auth: React.FC = () => {
             {isLogin ? '¿No tienes cuenta? Regístrate gratis' : '¿Ya tienes cuenta? Ingresa aquí'}
           </button>
         </div>
-
-        {isLogin && (
-          <div className="mt-8 bg-gray-50/80 p-4 rounded-2xl text-xs text-gray-500 border border-gray-100">
-            <p className="font-black uppercase tracking-widest text-[9px] text-gray-400 mb-2">Credenciales Demo:</p>
-            <p className="mb-1"><span className="font-bold text-gray-700">Admin:</span> admin@app.com / 123</p>
-            <p className="mb-1"><span className="font-bold text-gray-700">Contador:</span> carlos@contador.com / 123</p>
-            <p><span className="font-bold text-gray-700">Usuario:</span> user@demo.com / 123</p>
-          </div>
-        )}
       </div>
     </div>
   );
