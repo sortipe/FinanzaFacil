@@ -65,11 +65,14 @@ interface EmitResult {
 }
 
 interface Props {
+  isOpen?: boolean;
   onClose: () => void;
-  onEmitted: (result: EmitResult) => void;
+  onEmitted?: (result: EmitResult) => void;
 }
 
-export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
+export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) => {
+  if (isOpen !== undefined && !isOpen) return null;
+
   const { currentUser, sunatGlobalConfig, userProducts, addUserProduct, addPendingInvoice, removeUserProduct } = useStore();
   const [step, setStep] = useState(0);
   const [data, setData] = useState<WizardData>(() => {
@@ -184,7 +187,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
         setSuccess(true);
         setCdrInfo({ code: '---', description: 'Interno - No enviado a SUNAT' });
         const paddedCorr = typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001';
-        onEmitted({
+        onEmitted?.({
           id: `${data.serie}-${paddedCorr}`,
           name: `${data.documentType === 'factura' ? 'F' : 'B'}${data.serie}-${paddedCorr}`,
           sunatStatus: 'INTERNO',
@@ -214,7 +217,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
         const cdrInfoVal = result.cdrCode ? { code: result.cdrCode, description: result.cdrDesc || '' } : (result.cdrBase64 ? extractCdrStatus(result.sunatResponse) : null);
         setCdrInfo(cdrInfoVal);
         const paddedCorr = typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001';
-        onEmitted({
+        onEmitted?.({
           id: `${data.serie}-${paddedCorr}`,
           name: `${data.documentType === 'factura' ? 'F' : 'B'}${data.serie}-${paddedCorr}`,
           sunatStatus: 'ACEPTADO',
@@ -335,7 +338,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
               {success ? '¡Comprobante Emitido!' : `Emisión de ${data.documentType === 'factura' ? 'Factura' : 'Boleta'}${!data.sendToSunat ? ' Interna' : ''} Electrónica`}
             </h3>
           </div>
-          {!emitting && !success && (
+          {!emitting && (
             <button onClick={onClose} className="text-white hover:rotate-90 transition-transform"><X className="w-6 h-6" /></button>
           )}
         </div>
@@ -368,38 +371,8 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
               <div className="space-y-2">
                 <h4 className="text-xl font-black text-green-900 uppercase">{data.documentType === 'factura' ? 'Factura' : 'Boleta'} Emitida</h4>
                 <p className="text-sm text-gray-500 font-bold">{data.serie}-{typeof data.correlative === 'number' ? padCorrelative(data.correlative) : ''}</p>
-                {!data.sendToSunat ? (
-                  <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 rounded-full border border-amber-200 text-xs font-bold text-amber-700">
-                    <CloudOff className="w-4 h-4" /> Interno — No enviado a SUNAT
-                  </div>
-                ) : verificando ? (
-                  <div className="flex items-center justify-center gap-2 text-xs text-gray-500"><Loader2 className="w-4 h-4 animate-spin" /> Verificando con SUNAT...</div>
-                ) : (<>
-                  {consultaCpe ? (
-                      <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-bold ${
-                        consultaCpe.statusCode === '0' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-amber-50 border-amber-200 text-amber-700'
-                      }`}>
-                        {consultaCpe.statusCode === '0' ? '✅' : '⚠️'} SUNAT: Código {consultaCpe.statusCode || 'N/A'} — {consultaCpe.description || (consultaCpe.statusCode === '0' ? 'Aceptado' : 'Ver respuesta')}
-                      </div>
-                    ) : cdrInfo ? (
-                      <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 rounded-full border border-green-200 text-xs font-bold text-green-700">
-                        CDR: {cdrInfo.code} — {cdrInfo.description || 'Aceptado'}
-                      </div>
-                    ) : null}
-                  </>
-                )}
-                {sunatResponse && (
-                  <details className="text-left bg-gray-50 rounded-xl border border-gray-200 overflow-hidden">
-                    <summary className="text-[10px] font-bold text-gray-500 uppercase p-3 cursor-pointer hover:bg-gray-100">Ver respuesta SUNAT</summary>
-                    <pre className="text-[9px] text-gray-700 p-3 max-h-48 overflow-auto whitespace-pre-wrap break-all">{sunatResponse}</pre>
-                  </details>
-                )}
-                {consultaCpe?.raw && (
-                  <details className="text-left bg-blue-50 rounded-xl border border-blue-200 overflow-hidden">
-                    <summary className="text-[10px] font-bold text-blue-600 uppercase p-3 cursor-pointer hover:bg-blue-100">Ver Consulta CPE (raw)</summary>
-                    <pre className="text-[9px] text-gray-700 p-3 max-h-32 overflow-auto whitespace-pre-wrap break-all">{consultaCpe.raw}</pre>
-                  </details>
-                )}
+
+
               </div>
               <button onClick={onClose}
                 className="w-full py-4 bg-green-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-green-700 transition">
@@ -740,7 +713,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                     ) : data.sendToSunat ? (
                       <><Globe className="w-4 h-4 mr-2" /> Emitir</>
                     ) : (
-                      <><FileText className="w-4 h-4 mr-2" /> Emitir como Interno (sin SUNAT)</>
+                      <><FileText className="w-4 h-4 mr-2" /> Emitir</>
                     )}
                   </button>
                 </div>

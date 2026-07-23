@@ -43,6 +43,7 @@ export const updatePaymentMethod = (id: string, data: any): Promise<any> => requ
 // Subscription History
 export const fetchSubscriptionHistory = (userId?: string): Promise<any> => request(`/subscription-history${userId ? `?userId=${userId}` : ''}`);
 export const createSubscriptionRecord = (record: any): Promise<any> => request('/subscription-history', { method: 'POST', body: JSON.stringify(record) });
+export const updateSubscriptionRecord = (id: string, record: any): Promise<any> => request(`/subscription-history/${id}`, { method: 'PUT', body: JSON.stringify(record) });
 
 // Complaints
 export const fetchComplaints = (): Promise<any> => request('/complaints');

@@ -19,8 +19,8 @@ interface StoreContextType {
 
   login: (email: string, password: string) => boolean;
   logout: () => void;
-  registerUser: (user: User) => void;
-  updateUser: (userId: string, data: Partial<User>) => void;
+  registerUser: (user: User) => Promise<void>;
+  updateUser: (userId: string, data: Partial<User>) => Promise<void>;
   changePassword: (userId: string, currentPassword: string, newPassword: string) => boolean;
   generatePassword: (length?: number) => string;
   updateUserStatus: (userId: string, status: SubscriptionStatus) => void;
@@ -38,6 +38,7 @@ interface StoreContextType {
   updatePackage: (id: string, details: Partial<SubscriptionPackage>) => void;
   assignAccountant: (userId: string, accountantId: string) => void;
   addSubscriptionRecord: (record: SubscriptionRecord) => void;
+  updateSubscriptionRecord: (id: string, details: Partial<SubscriptionRecord>) => void;
   addComplaint: (complaint: Complaint) => void;
   updateComplaintStatus: (id: string, status: 'PENDIENTE' | 'ATENDIDO') => void;
 
@@ -45,6 +46,7 @@ interface StoreContextType {
   markNotificationAsRead: (id: string) => void;
   sunatGlobalConfig: { sunatToken: string; sunatApiUrl: string };
   updateSunatGlobalConfig: (config: { sunatToken?: string; sunatApiUrl?: string }) => void;
+  refreshData: () => Promise<void>;
 }
 
 const StoreContext = createContext<StoreContextType | undefined>(undefined);
@@ -92,6 +94,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         ]);
         if (cancelled) return;
         setUsers(u);
+        setCurrentUser(prev => {
+          if (!prev) return null;
+          const fresh = u.find((usr: User) => usr.id === prev.id);
+          const updated = fresh || prev;
+          localStorage.setItem('ff_current_user', JSON.stringify(updated));
+          return updated;
+        });
         setExpenses(e);
         setTaxDocuments(td);
         setPackages(pkg);
@@ -139,13 +148,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.removeItem('ff_current_user');
   };
 
-  const registerUser = (user: User) => {
-    api.createUser(user).catch(() => {});
+  const registerUser = async (user: User) => {
+    try {
+      await api.createUser(user);
+    } catch (e: any) {
+      console.error('Error al registrar usuario:', e);
+      throw e;
+    }
     setUsers(prev => [...prev, user]);
   };
 
-  const updateUser = (userId: string, data: Partial<User>) => {
-    api.updateUser(userId, data).catch(() => {});
+  const updateUser = async (userId: string, data: Partial<User>) => {
+    try {
+      await api.updateUser(userId, data);
+    } catch (e: any) {
+      console.error('Error al actualizar usuario:', e);
+      throw e;
+    }
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...data } : u));
     if (currentUser?.id === userId) setCurrentUser(prev => prev ? { ...prev, ...data } : null);
   };
@@ -203,8 +222,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const assignAccountant = (userId: string, accountantId: string) => updateUser(userId, { assignedAccountantId: accountantId });
 
   const addSubscriptionRecord = (record: SubscriptionRecord) => {
-    api.createSubscriptionRecord(record).catch(() => {});
+    api.createSubscriptionRecord(record).catch((err) => {
+      console.error("Error creating subscription record:", err);
+      alert("Error al registrar el pago en el servidor: " + (err.message || err));
+    });
     setSubscriptionHistory(prev => [record, ...prev]);
+  };
+
+  const updateSubscriptionRecord = (id: string, details: Partial<SubscriptionRecord>) => {
+    api.updateSubscriptionRecord(id, details).catch((err) => {
+      console.error("Error updating subscription record:", err);
+      alert("Error al actualizar la suscripción en el servidor: " + (err.message || err));
+    });
+    setSubscriptionHistory(prev => prev.map(s => s.id === id ? { ...s, ...details } : s));
   };
 
   const addNotification = (notification: AdminNotification) => {
@@ -264,17 +294,53 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const updatePendingInvoiceStatus = (id: string, status: PendingInvoice['status'], lastError?: string) => {
-    api.updatePendingInvoice(id, { status, lastAttempt: new Date().toISOString().split('T')[0], attemptCount: 0, lastError }).catch(() => {});
-    setPendingInvoices(prev => prev.map(p => p.id === id ? { ...p, status, lastAttempt: new Date().toISOString().split('T')[0], lastError } : p));
+    setPendingInvoices(prev => prev.map(p => {
+      if (p.id !== id) return p;
+      const newAttempts = status === 'PENDIENTE' ? (p.attemptCount || 0) + 1 : p.attemptCount;
+      const updated = { ...p, status, lastAttempt: new Date().toISOString().split('T')[0], attemptCount: newAttempts, lastError };
+      api.updatePendingInvoice(id, { status, lastAttempt: updated.lastAttempt, attemptCount: newAttempts, lastError }).catch(() => {});
+      return updated;
+    }));
+  };
+
+  const refreshData = async () => {
+    try {
+      const [u, e, td, pkg, pm, sh, cp, up, pi, sc, n] = await Promise.all([
+        api.fetchUsers().catch(() => users),
+        api.fetchExpenses().catch(() => expenses),
+        api.fetchTaxDocuments().catch(() => taxDocuments),
+        api.fetchPackages().catch(() => packages),
+        api.fetchPaymentMethods().catch(() => paymentMethods),
+        api.fetchSubscriptionHistory().catch(() => subscriptionHistory),
+        api.fetchComplaints().catch(() => complaints),
+        api.fetchUserProducts().catch(() => userProducts),
+        api.fetchPendingInvoices().catch(() => pendingInvoices),
+        api.fetchSunatConfig().catch(() => sunatGlobalConfig),
+        api.fetchNotifications().catch(() => notifications),
+      ]);
+      setUsers(u);
+      setExpenses(e);
+      setTaxDocuments(td);
+      setPackages(pkg);
+      setPaymentMethods(pm);
+      setSubscriptionHistory(sh);
+      setComplaints(cp);
+      setUserProducts(up);
+      setPendingInvoices(pi);
+      setSunatGlobalConfig(sc);
+      setNotifications(n);
+    } catch (err) {
+      console.error('Error refreshing store:', err);
+    }
   };
 
   return (
     <StoreContext.Provider value={{
       currentUser, users, expenses, taxDocuments, packages, paymentMethods, subscriptionHistory, notifications, complaints, sunatGlobalConfig, userProducts, pendingInvoices, loading,
       login, logout, registerUser, updateUser, updateUserStatus, addExpense, addTaxDocument, deleteTaxDocument, changePassword, generatePassword,
-      deleteUser, updatePaymentMethod, updatePackage, assignAccountant, addSubscriptionRecord,
+      deleteUser, updatePaymentMethod, updatePackage, assignAccountant, addSubscriptionRecord, updateSubscriptionRecord,
       addNotification, markNotificationAsRead, addComplaint, updateComplaintStatus, updateSunatGlobalConfig, addUserProduct, removeUserProduct,
-      addPendingInvoice, removePendingInvoice, updatePendingInvoiceStatus
+      addPendingInvoice, removePendingInvoice, updatePendingInvoiceStatus, refreshData
     }}>
       {children}
     </StoreContext.Provider>

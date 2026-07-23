@@ -21,7 +21,7 @@ export const AccountantDashboard: React.FC = () => {
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
   const [showCreateClientModal, setShowCreateClientModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'clientes' | 'reporte' | 'pdt' | 'subir'>('clientes');
+  const [activeTab, setActiveTab] = useState<'clientes' | 'reporte' | 'subir'>('clientes');
   const [searchClient, setSearchClient] = useState('');
 
   // Filtros mes/año para movimientos
@@ -77,7 +77,7 @@ export const AccountantDashboard: React.FC = () => {
       e.date.startsWith(now.toISOString().slice(0, 7))
     );
     const docs = taxDocuments.filter(d =>
-      d.userId === clientId &&
+      d.userId === clientId && d.sunatStatus !== 'INTERNO' &&
       d.uploadDate?.startsWith(now.toISOString().slice(0, 7))
     );
     return {
@@ -91,7 +91,7 @@ export const AccountantDashboard: React.FC = () => {
   };
 
   // ─── Handle Create Client ───
-  const handleCreateClient = (e: React.FormEvent) => {
+  const handleCreateClient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
     const pwd = generatedPassword || generatePassword();
@@ -109,15 +109,19 @@ export const AccountantDashboard: React.FC = () => {
       businessName: newClientData.businessName,
       taxAddress: newClientData.taxAddress
     };
-    registerUser(newUser);
-    fetch('/api/send-welcome-email', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: newUser.email, name: newUser.name, password: pwd })
-    }).catch(() => {});
-    setNewClientData({ name: '', email: '', ruc: '', dni: '', businessName: '', taxAddress: '' });
-    setGeneratedPassword('');
-    setShowCreateClientModal(false);
+    try {
+      await registerUser(newUser);
+      fetch('/api/send-welcome-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: newUser.email, name: newUser.name, password: pwd })
+      }).catch(() => {});
+      setNewClientData({ name: '', email: '', ruc: '', dni: '', businessName: '', taxAddress: '' });
+      setGeneratedPassword('');
+      setShowCreateClientModal(false);
+    } catch (err: any) {
+      alert("Error al registrar cliente en la base de datos: " + (err.message || "Error de conexión"));
+    }
   };
 
   // ─── Handle Doc Upload ───
@@ -350,12 +354,16 @@ export const AccountantDashboard: React.FC = () => {
     if (!client) return <div className="py-10 text-center text-gray-400">Cliente no encontrado</div>;
 
     const filteredExpenses = expenses
-      .filter(e => e.userId === selectedClientId && !e.isPrivate &&
-        e.date.startsWith(`${movFilterYear}-${String(MONTHS.indexOf(movFilterMonth) + 1).padStart(2, '0')}`))
+      .filter(e => {
+        if (e.userId !== selectedClientId || e.isPrivate) return false;
+        const matchingDoc = taxDocuments.find(d => d.id === e.invoiceNumber);
+        if (matchingDoc && matchingDoc.sunatStatus === 'INTERNO') return false;
+        return e.date.startsWith(`${movFilterYear}-${String(MONTHS.indexOf(movFilterMonth) + 1).padStart(2, '0')}`);
+      })
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     const clientDocs = taxDocuments
-      .filter(d => d.userId === selectedClientId)
+      .filter(d => d.userId === selectedClientId && d.sunatStatus !== 'INTERNO')
       .sort((a, b) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime());
 
     const totals = filteredExpenses.reduce((acc, exp) => {
@@ -583,22 +591,45 @@ export const AccountantDashboard: React.FC = () => {
   };
 
   // ─── View: Reporte Mensual ───
+  const getDocAmount = (d: TaxDocument): number => {
+    if (d.metadata) {
+      if (typeof d.metadata === 'object' && d.metadata.amount !== undefined) {
+        return parseFloat(d.metadata.amount) || 0;
+      }
+      if (typeof d.metadata === 'string') {
+        try {
+          const p = JSON.parse(d.metadata);
+          if (p.amount !== undefined) return parseFloat(p.amount) || 0;
+        } catch {}
+      }
+    }
+    if (d.xmlContent) {
+      const match = d.xmlContent.match(/<cbc:PayableAmount[^>]*>([^<]+)<\/cbc:PayableAmount>/) ||
+                    d.xmlContent.match(/<cbc:TaxInclusiveAmount[^>]*>([^<]+)<\/cbc:TaxInclusiveAmount>/);
+      if (match) return parseFloat(match[1]) || 0;
+    }
+    const matchExp = expenses.find(e => e.invoiceNumber === d.id || e.id.includes(d.id));
+    if (matchExp) return matchExp.amount;
+    return 0;
+  };
+
   const renderReporte = () => {
     const expensesByClient = repClientId
-      ? expenses.filter(e => e.userId === repClientId && !e.isPrivate &&
-          e.date.startsWith(`${repYear}-${String(MONTHS.indexOf(repMonth) + 1).padStart(2, '0')}`))
+      ? expenses.filter(e => {
+          if (e.userId !== repClientId || e.isPrivate) return false;
+          const matchingDoc = taxDocuments.find(d => d.id === e.invoiceNumber);
+          if (matchingDoc && matchingDoc.sunatStatus === 'INTERNO') return false;
+          return e.date.startsWith(`${repYear}-${String(MONTHS.indexOf(repMonth) + 1).padStart(2, '0')}`);
+        })
       : [];
 
     const incomeDocs = repClientId
-      ? taxDocuments.filter(d => d.userId === repClientId &&
+      ? taxDocuments.filter(d => d.userId === repClientId && d.sunatStatus !== 'INTERNO' &&
           d.uploadDate?.startsWith(`${repYear}-${String(MONTHS.indexOf(repMonth) + 1).padStart(2, '0')}`))
       : [];
 
     const totalGastos = expensesByClient.reduce((s, e) => s + e.amount, 0);
-    const totalIngresos = incomeDocs.reduce((s, d) => {
-      const monto = d.metadata?.amount || 0;
-      return s + monto;
-    }, 0);
+    const totalIngresos = incomeDocs.reduce((s, d) => s + getDocAmount(d), 0);
 
     const byCategory = expensesByClient.reduce<Record<string, number>>((acc, e) => {
       acc[e.category] = (acc[e.category] || 0) + e.amount;
@@ -676,7 +707,7 @@ export const AccountantDashboard: React.FC = () => {
                   {incomeDocs.map(d => (
                     <div key={d.id} className="flex justify-between text-[11px] py-1 border-b border-gray-50">
                       <span className="text-gray-600 font-bold uppercase">{d.name}</span>
-                      <span className="font-black">S/ {(d.metadata?.amount || 0).toFixed(2)}</span>
+                      <span className="font-black">S/ {getDocAmount(d).toFixed(2)}</span>
                     </div>
                   ))}
                 </div>
@@ -714,12 +745,12 @@ export const AccountantDashboard: React.FC = () => {
       : [];
 
     const ventas = pdtClientId
-      ? taxDocuments.filter(d => d.userId === pdtClientId &&
+      ? taxDocuments.filter(d => d.userId === pdtClientId && d.sunatStatus !== 'INTERNO' &&
           d.uploadDate?.startsWith(yearMonth))
       : [];
 
     const totalCompras = compras.reduce((s, e) => s + e.amount, 0);
-    const totalVentas = ventas.reduce((s, d) => s + (d.metadata?.amount || 0), 0);
+    const totalVentas = ventas.reduce((s, d) => s + getDocAmount(d), 0);
     const igvCompras = compras.reduce((s, e) => s + (e.igv || (e.amount - (e.subtotal || e.amount / 1.18))), 0);
     const igvVentas = totalVentas - (totalVentas / 1.18);
     const igvPagar = igvVentas - igvCompras;
@@ -727,7 +758,7 @@ export const AccountantDashboard: React.FC = () => {
     const handleExportPdt = () => {
       const clientName = myClients.find(c => c.id === pdtClientId)?.name || 'cliente';
       const incomeRows = ventas.map(d => ({
-        name: d.name, amount: d.metadata?.amount || 0,
+        name: d.name, amount: getDocAmount(d),
         date: d.uploadDate || '', ruc: d.metadata?.recipientRuc || ''
       }));
       const csv = buildPdtCsv(compras, incomeRows, periodoLabel);
@@ -831,7 +862,7 @@ export const AccountantDashboard: React.FC = () => {
                     </tr></thead>
                     <tbody className="divide-y divide-gray-100 text-xs">
                       {ventas.map(d => {
-                        const monto = d.metadata?.amount || 0;
+                        const monto = getDocAmount(d);
                         const sub = monto / 1.18;
                         const igv = monto - sub;
                         return <tr key={d.id}>
@@ -1062,7 +1093,6 @@ export const AccountantDashboard: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case 'reporte': return renderReporte();
-      case 'pdt': return renderPdt();
       case 'subir': return renderSubirArchivo();
       default: return selectedClientId ? renderMovimientos() : renderClientes();
     }
@@ -1071,7 +1101,6 @@ export const AccountantDashboard: React.FC = () => {
   const tabs = [
     { key: 'clientes' as const, label: 'Clientes', icon: Users },
     { key: 'reporte' as const, label: 'Reporte Mensual', icon: BarChart3 },
-    { key: 'pdt' as const, label: 'PDT 621', icon: FileText },
     { key: 'subir' as const, label: 'Subir Archivo', icon: Upload },
   ];
 

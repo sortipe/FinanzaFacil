@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   must_change_password TINYINT(1) DEFAULT 0,
   subscription_status VARCHAR(20) DEFAULT 'PENDING',
   assigned_accountant_id VARCHAR(50),
+  phone VARCHAR(50),
   profile_picture TEXT,
   subscription_start_date VARCHAR(10),
   subscription_end_date VARCHAR(10),
@@ -100,6 +101,7 @@ CREATE TABLE IF NOT EXISTS subscription_history (
   end_date VARCHAR(10),
   status VARCHAR(20) DEFAULT 'PAID',
   payment_details TEXT,
+  voucher_image LONGTEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -178,6 +180,12 @@ const initSchema = async () => {
       console.error('Error creating table:', err.message);
     }
   }
+  try {
+    await db.query('ALTER TABLE users ADD COLUMN phone VARCHAR(50)');
+  } catch (e) {}
+  try {
+    await db.query('ALTER TABLE subscription_history ADD COLUMN voucher_image LONGTEXT');
+  } catch (e) {}
   console.log('Database schema initialized.');
 };
 

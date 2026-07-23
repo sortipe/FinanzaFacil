@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const SunatEngine = require('./sunat-engine');
@@ -14,10 +14,6 @@ initSchema().then(() => {
   return seed();
 }).catch(err => console.error('DB init error:', err));
 
-// API Routes (CRUD)
-const apiRoutes = require('./api-routes');
-app.use('/api', apiRoutes);
-
 // Logger Universal
 app.use((req, res, next) => {
     const fs = require('fs');
@@ -26,6 +22,10 @@ app.use((req, res, next) => {
     console.log(log.trim());
     next();
 });
+
+// API Routes (CRUD)
+const apiRoutes = require('./api-routes');
+app.use('/api', apiRoutes);
 
 const config = {
     ruc: process.env.SUNAT_RUC,

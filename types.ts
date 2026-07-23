@@ -20,6 +20,7 @@ export interface User {
   mustChangePassword?: boolean;
   subscriptionStatus?: SubscriptionStatus;
   assignedAccountantId?: string | null;
+  phone?: string;
   profilePicture?: string;
   subscriptionStartDate?: string;
   subscriptionEndDate?: string;
@@ -149,6 +150,7 @@ export interface SubscriptionRecord {
   endDate?: string;
   status: 'PAID' | 'PENDING' | 'CANCELLED';
   paymentDetails?: string;
+  voucherImage?: string;
 }
 
 export interface AdminNotification {
