@@ -3,12 +3,35 @@ export enum UserRole {
   ADMIN = 'ADMIN',
   ACCOUNTANT = 'ACCOUNTANT',
   USER = 'USER',
+  SUB_USER = 'SUB_USER',
 }
 
 export enum SubscriptionStatus {
   PENDING = 'PENDING',
   ACTIVE = 'ACTIVE',
   EXPIRED = 'EXPIRED',
+}
+
+export interface Company {
+  id: string;
+  ownerUserId: string;
+  name: string;
+  ruc?: string;
+  businessName?: string;
+  taxAddress?: string;
+  dni?: string;
+  solUser?: string;
+  solPass?: string;
+  sunatToken?: string;
+  sunatApiUrl?: string;
+  certBase64?: string;
+  certPass?: string;
+  serieFactura?: string;
+  serieBoleta?: string;
+  sunatEnv?: 'SANDBOX' | 'PRODUCTION';
+  assignedAccountantId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface User {
@@ -19,28 +42,17 @@ export interface User {
   password?: string;
   mustChangePassword?: boolean;
   subscriptionStatus?: SubscriptionStatus;
-  assignedAccountantId?: string | null;
+  phone?: string;
   profilePicture?: string;
-  // Campos fiscales adicionales
-  ruc?: string;
-  dni?: string;
-  businessName?: string;
-  taxAddress?: string;
-
-  // Credenciales SUNAT
-  solUser?: string;
-  solPass?: string;
-  sunatToken?: string;
-  sunatApiUrl?: string; // Para alternar entre Sandbox y Producción
-  certBase64?: string; // Certificado PFX en Base64
-  certPass?: string;   // Contraseña del certificado
-  serieFactura?: string; // Serie para facturas (ej: F001)
-  serieBoleta?: string;  // Serie para boletas (ej: B001)
+  subscriptionStartDate?: string;
+  subscriptionEndDate?: string;
+  parentId?: string;
 }
 
 export interface TaxDocument {
   id: string;
   userId: string;
+  companyId?: string;
   accountantId: string;
   name: string;
   fileUrl: string; // Base64 representation
@@ -77,9 +89,39 @@ export interface InvoiceItem {
   total: number;
 }
 
+export interface UserProduct {
+  id: string;
+  userId: string;
+  companyId?: string;
+  description: string;
+  unit: string;
+  unitPrice: number;
+  lastUsed: string;
+}
+
+export interface PendingInvoice {
+  id: string;
+  userId: string;
+  companyId?: string;
+  serie: string;
+  correlative: number;
+  documentType: 'factura' | 'boleta';
+  payload: any;
+  customerDocType: string;
+  customerDocNumber: string;
+  customerName: string;
+  amount: number;
+  createdAt: string;
+  lastAttempt: string;
+  attemptCount: number;
+  status: 'PENDIENTE' | 'ENVIANDO' | 'ACEPTADO' | 'RECHAZADO';
+  lastError?: string;
+}
+
 export interface Expense {
   id: string;
   userId: string;
+  companyId?: string;
   amount: number;
   currency: string;
   description: string;
@@ -116,8 +158,11 @@ export interface SubscriptionRecord {
   packageName: string;
   amount: number;
   date: string;
+  startDate?: string;
+  endDate?: string;
   status: 'PAID' | 'PENDING' | 'CANCELLED';
   paymentDetails?: string;
+  voucherImage?: string;
 }
 
 export interface AdminNotification {
@@ -131,6 +176,7 @@ export interface AdminNotification {
 export interface Complaint {
   id: string;
   userId: string;
+  companyId?: string;
   userName: string;
   userEmail: string;
   date: string;

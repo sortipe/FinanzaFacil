@@ -4,48 +4,40 @@ import { Shield, Key, FileCode, CheckCircle, AlertCircle, Upload, FileText, Sear
 import { consultaService } from '../services/consultaService';
 
 
-const getInitialFormData = (user: any) => {
-    const getCorr = (userId: string | undefined, serie: string) => {
-        if (!userId) return 0;
-        return parseInt(localStorage.getItem(`ff_corr_${userId}_${serie}`) || '0', 10);
+const getInitialFormData = (company: any) => {
+    const getCorr = (companyId: string | undefined, serie: string) => {
+        if (!companyId) return 0;
+        return parseInt(localStorage.getItem(`ff_corr_${companyId}_${serie}`) || '0', 10);
     };
     return {
-        ruc: user?.ruc || '',
-        solUser: user?.solUser || user?.user || '',
-        solPass: user?.solPass || user?.pass || '',
-        emitterName: user?.businessName || '',
-        certPass: user?.certPass || '',
-        serieFactura: user?.serieFactura || 'F001',
-        serieBoleta: user?.serieBoleta || 'B001',
-        correlativoFactura: getCorr(user?.id, user?.serieFactura || 'F001'),
-        correlativoBoleta: getCorr(user?.id, user?.serieBoleta || 'B001')
+        ruc: company?.ruc || '',
+        solUser: company?.solUser || '',
+        solPass: company?.solPass || '',
+        emitterName: company?.businessName || '',
+        certPass: company?.certPass || '',
+        sunatEnv: company?.sunatEnv || 'PRODUCTION',
+        serieFactura: company?.serieFactura || 'F001',
+        serieBoleta: company?.serieBoleta || 'B001',
+        correlativoFactura: getCorr(company?.id, company?.serieFactura || 'F001'),
+        correlativoBoleta: getCorr(company?.id, company?.serieBoleta || 'B001')
     };
 };
 
 export const SunatSettings: React.FC = () => {
-    const { currentUser, updateUser } = useStore();
-    const [formData, setFormData] = useState(getInitialFormData(currentUser));
+    const { selectedCompany, selectedCompanyId, updateCompany } = useStore();
+    const [formData, setFormData] = useState(getInitialFormData(selectedCompany));
 
-    // Sincronizar formData cuando currentUser cambia (ej: después de guardar)
+    // Sincronizar formData cuando selectedCompany cambia
     useEffect(() => {
-        setFormData(getInitialFormData(currentUser));
-    }, [currentUser]);
+        setFormData(getInitialFormData(selectedCompany));
+    }, [selectedCompany]);
 
-    // Migrar datos viejos (user/pass → solUser/solPass) al cargar el usuario
-    useEffect(() => {
-        if (currentUser && (currentUser as any).user && !currentUser.solUser) {
-            updateUser(currentUser.id, {
-                solUser: (currentUser as any).user,
-                solPass: (currentUser as any).pass
-            });
-        }
-    }, [currentUser]);
 
 
     const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
-    const [certName, setCertName] = useState<string | null>(currentUser?.certBase64 ? 'Certificado cargado' : null);
-    const [tempCertBase64, setTempCertBase64] = useState<string | null>(currentUser?.certBase64 || null);
+    const [certName, setCertName] = useState<string | null>(selectedCompany?.certBase64 ? 'Certificado cargado' : null);
+    const [tempCertBase64, setTempCertBase64] = useState<string | null>(selectedCompany?.certBase64 || null);
     const [searchingRuc, setSearchingRuc] = useState(false);
 
     const handleSearchRuc = async () => {
@@ -133,23 +125,25 @@ export const SunatSettings: React.FC = () => {
                 throw new Error(result.error || 'No se pudo conectar con SUNAT');
             }
 
-            // 2. Si es exitoso, guardar con los nombres que lee el formulario (solUser/solPass)
-            updateUser(currentUser!.id, {
-                ruc: formData.ruc,
-                solUser: formData.solUser,
-                solPass: formData.solPass,
-                certBase64: tempCertBase64,
-                certPass: formData.certPass,
-                sunatEnv: formData.sunatEnv,
-                businessName: formData.emitterName,
-                serieFactura: formData.serieFactura,
-                serieBoleta: formData.serieBoleta
-            });
+            // 2. Si es exitoso, guardar en la empresa
+            if (selectedCompanyId) {
+                updateCompany(selectedCompanyId, {
+                    ruc: formData.ruc,
+                    solUser: formData.solUser,
+                    solPass: formData.solPass,
+                    certBase64: tempCertBase64,
+                    certPass: formData.certPass,
+                    sunatEnv: formData.sunatEnv as any,
+                    businessName: formData.emitterName,
+                    serieFactura: formData.serieFactura,
+                    serieBoleta: formData.serieBoleta
+                });
+            }
 
             // Guardar correlativos en localStorage
-            const uid = currentUser!.id;
-            if (formData.serieFactura) localStorage.setItem(`ff_corr_${uid}_${formData.serieFactura}`, String(formData.correlativoFactura));
-            if (formData.serieBoleta) localStorage.setItem(`ff_corr_${uid}_${formData.serieBoleta}`, String(formData.correlativoBoleta));
+            const cid = selectedCompanyId || '';
+            if (formData.serieFactura) localStorage.setItem(`ff_corr_${cid}_${formData.serieFactura}`, String(formData.correlativoFactura));
+            if (formData.serieBoleta) localStorage.setItem(`ff_corr_${cid}_${formData.serieBoleta}`, String(formData.correlativoBoleta));
             
             setStatus('success');
             setTimeout(() => setStatus('idle'), 3000);
@@ -160,7 +154,11 @@ export const SunatSettings: React.FC = () => {
     };
 
 
-    if (!currentUser) return null;
+    if (!selectedCompany) return (
+        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-2xl mx-auto border border-gray-100 text-center">
+            <p className="text-gray-500 font-bold">Selecciona una empresa para configurar sus credenciales SUNAT.</p>
+        </div>
+    );
 
     return (
         <div className="bg-white rounded-2xl shadow-xl p-8 max-w-2xl mx-auto border border-gray-100">

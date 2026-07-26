@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
 import { consultaService } from '../services/consultaService';
-import { InvoiceItem } from '../types';
+import { InvoiceItem, UserProduct } from '../types';
 import {
   X, User, Search, Loader2, FileText, Calendar, DollarSign,
   CheckCircle2, AlertTriangle, Plus, Trash2, Eye, ArrowLeft,
@@ -36,7 +36,7 @@ const saveCorrelative = (userId: string, serie: string, corr: number) => {
 
 const padCorrelative = (n: number): string => String(n).padStart(8, '0');
 
-const getDefaultData = (user?: any): WizardData => ({
+const getDefaultData = (company?: any): WizardData => ({
   customerDocType: 'RUC',
   customerDocNumber: '',
   customerName: '',
@@ -44,7 +44,7 @@ const getDefaultData = (user?: any): WizardData => ({
   customerEmail: '',
   documentType: 'factura',
   sendToSunat: true,
-  serie: user?.serieFactura || 'F001',
+  serie: company?.serieFactura || 'F001',
   correlative: 1,
   issueDate: new Date().toISOString().split('T')[0],
   currency: 'PEN',
@@ -65,18 +65,21 @@ interface EmitResult {
 }
 
 interface Props {
+  isOpen?: boolean;
   onClose: () => void;
-  onEmitted: (result: EmitResult) => void;
+  onEmitted?: (result: EmitResult) => void;
 }
 
-export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
-  const { currentUser, sunatGlobalConfig } = useStore();
+export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) => {
+  if (isOpen !== undefined && !isOpen) return null;
+
+  const { currentUser, selectedCompany, selectedCompanyId, sunatGlobalConfig, userProducts, addUserProduct, addPendingInvoice, removeUserProduct } = useStore();
   const [step, setStep] = useState(0);
   const [data, setData] = useState<WizardData>(() => {
-    const userId = currentUser?.id;
-    const defaults = getDefaultData(currentUser);
+    const companyId = selectedCompanyId;
+    const defaults = getDefaultData(selectedCompany);
     const serie = defaults.serie;
-    const corr = userId ? getNextCorrelative(userId, serie) : 1;
+    const corr = companyId ? getNextCorrelative(companyId, serie) : 1;
     return { ...defaults, correlative: corr };
   });
   const [searching, setSearching] = useState(false);
@@ -87,6 +90,8 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
   const [verificando, setVerificando] = useState(false);
   const [consultaCpe, setConsultaCpe] = useState<{success: boolean; statusCode: string; description: string; raw: string} | null>(null);
   const [success, setSuccess] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState<{ idx: number; filter: string }>({ idx: -1, filter: '' });
+  const suggestionRef = useRef<HTMLDivElement>(null);
 
   const extractCdrStatus = (soapXml: string): {code: string; description: string} | null => {
     try {
@@ -123,7 +128,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
     const isDni = data.customerDocType === 'DNI';
     const total = data.items.reduce((s, i) => s + i.total, 0);
 
-    if (data.sendToSunat && (!currentUser?.solUser || !currentUser?.solPass)) {
+    if (data.sendToSunat && (!selectedCompany?.solUser || !selectedCompany?.solPass)) {
       setError('Credenciales SOL no configuradas. Ve a Configuración SUNAT.'); setEmitting(false); return;
     }
 
@@ -134,7 +139,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
         customerRuc: data.customerDocNumber,
         customerName: data.customerName,
         customerType: isDni ? '1' : '6',
-        emitterName: currentUser?.businessName || 'MI EMPRESA S.A.C.',
+        emitterName: selectedCompany?.businessName || 'MI EMPRESA S.A.C.',
         items: data.items.map(i => ({
           description: i.description,
           quantity: i.quantity,
@@ -146,25 +151,44 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
         hasEstablishment: true
       },
       credentials: {
-        ruc: currentUser?.ruc,
-        user: currentUser?.solUser,
-        pass: currentUser?.solPass,
-        certBase64: currentUser?.certBase64,
-        certPass: currentUser?.certPass,
-        env: 'PRODUCTION'
+        ruc: selectedCompany?.ruc,
+        user: selectedCompany?.solUser,
+        pass: selectedCompany?.solPass,
+        certBase64: selectedCompany?.certBase64,
+        certPass: selectedCompany?.certPass,
+        env: selectedCompany?.sunatEnv || 'PRODUCTION'
       }
     };
+
+    const buildPendingInvoice = (errorMsg: string) => ({
+      id: `${data.serie}-${typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001'}`,
+      userId: currentUser?.id || 'unknown',
+      companyId: selectedCompanyId || '',
+      serie: data.serie,
+      correlative: typeof data.correlative === 'number' ? data.correlative : 0,
+      documentType: data.documentType,
+      payload,
+      customerDocType: data.customerDocType,
+      customerDocNumber: data.customerDocNumber,
+      customerName: data.customerName,
+      amount: total,
+      createdAt: new Date().toISOString(),
+      lastAttempt: new Date().toISOString(),
+      attemptCount: 0,
+      status: 'PENDIENTE' as const,
+      lastError: errorMsg
+    });
 
     try {
       if (!data.sendToSunat) {
         // === FLUJO INTERNO (sin envío a SUNAT) ===
-        if (currentUser?.id && typeof data.correlative === 'number') {
-          saveCorrelative(currentUser.id, data.serie, data.correlative);
+        if (selectedCompanyId && typeof data.correlative === 'number') {
+          saveCorrelative(selectedCompanyId, data.serie, data.correlative);
         }
         setSuccess(true);
         setCdrInfo({ code: '---', description: 'Interno - No enviado a SUNAT' });
         const paddedCorr = typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001';
-        onEmitted({
+        onEmitted?.({
           id: `${data.serie}-${paddedCorr}`,
           name: `${data.documentType === 'factura' ? 'F' : 'B'}${data.serie}-${paddedCorr}`,
           sunatStatus: 'INTERNO',
@@ -184,17 +208,17 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
       const result = await response.json();
       if (result.success) {
         // Guardar correlativo usado
-        if (currentUser?.id && typeof data.correlative === 'number') {
-          saveCorrelative(currentUser.id, data.serie, data.correlative);
+        if (selectedCompanyId && typeof data.correlative === 'number') {
+          saveCorrelative(selectedCompanyId, data.serie, data.correlative);
           // Pre-cargar siguiente correlativo para el próximo wizard
-          localStorage.setItem(`ff_corr_next_${currentUser.id}_${data.serie}`, String(data.correlative + 1));
+          localStorage.setItem(`ff_corr_next_${selectedCompanyId}_${data.serie}`, String(data.correlative + 1));
         }
         setSuccess(true);
         setSunatResponse(result.sunatResponse || '');
         const cdrInfoVal = result.cdrCode ? { code: result.cdrCode, description: result.cdrDesc || '' } : (result.cdrBase64 ? extractCdrStatus(result.sunatResponse) : null);
         setCdrInfo(cdrInfoVal);
         const paddedCorr = typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001';
-        onEmitted({
+        onEmitted?.({
           id: `${data.serie}-${paddedCorr}`,
           name: `${data.documentType === 'factura' ? 'F' : 'B'}${data.serie}-${paddedCorr}`,
           sunatStatus: 'ACEPTADO',
@@ -212,11 +236,11 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              ruc: currentUser?.ruc,
+              ruc: selectedCompany?.ruc,
               tipo: tipoDoc,
               serie: data.serie,
               numero: correlativoNum,
-              credentials: { ruc: currentUser?.ruc, user: currentUser?.solUser, pass: currentUser?.solPass, env: 'PRODUCTION' }
+              credentials: { ruc: selectedCompany?.ruc, user: selectedCompany?.solUser, pass: selectedCompany?.solPass, env: selectedCompany?.sunatEnv || 'PRODUCTION' }
             })
           });
           const cpeResult = await cpeResp.json();
@@ -229,9 +253,12 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
       } else {
         setError(result.error || 'Error del servidor SUNAT');
         if (result.sunatResponse) setSunatResponse(result.sunatResponse);
+        addPendingInvoice(buildPendingInvoice(result.error || 'Error del servidor SUNAT'));
       }
     } catch (err: any) {
-      setError('Error de conexión: ' + (err.message || 'Desconocido'));
+      const errorMsg = 'Error de conexión: ' + (err.message || 'Desconocido');
+      setError(errorMsg);
+      addPendingInvoice(buildPendingInvoice(errorMsg));
     } finally { setEmitting(false); }
   };
 
@@ -245,7 +272,18 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
     return true;
   };
 
-  const next = () => { if (canGoNext()) { setStep(s => s + 1); setError(''); } };
+  const next = () => {
+    if (!canGoNext()) return;
+    if (step === 2) {
+      data.items.forEach(item => {
+        if (item.description.trim()) {
+          addUserProduct({ description: item.description.trim(), unit: item.unit, unitPrice: item.unitPrice });
+        }
+      });
+    }
+    setStep(s => s + 1);
+    setError('');
+  };
   const prev = () => { setStep(s => s - 1); setError(''); };
 
   const addItem = () => setData(prev => ({
@@ -260,7 +298,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
       const rawUnitPrice = partial.unitPrice ?? items[idx].unitPrice;
       const unitPrice = typeof rawUnitPrice === 'string' ? (parseFloat(rawUnitPrice) || 0) : rawUnitPrice;
       const qty = partial.quantity ?? items[idx].quantity;
-      items[idx].total = parseFloat((unitPrice * qty * 1.18).toFixed(2));
+      items[idx].total = parseFloat((unitPrice * qty).toFixed(2));
     }
     return { ...prev, items };
   });
@@ -270,11 +308,26 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
   }));
 
   const totalGeneral = data.items.reduce((s, i) => s + i.total, 0);
-  const totalGravada = data.items.reduce((s, i) => {
-    const up = typeof i.unitPrice === 'string' ? (parseFloat(i.unitPrice) || 0) : i.unitPrice;
-    return s + (up * i.quantity);
-  }, 0);
+  const totalGravada = parseFloat((totalGeneral / 1.18).toFixed(2));
   const totalIgv = totalGeneral - totalGravada;
+
+  const userProductSuggestions = useMemo(() => {
+    if (activeSuggestion.idx < 0 || !activeSuggestion.filter) return [];
+    const filter = activeSuggestion.filter.toLowerCase();
+    return (userProducts || []).filter(p =>
+      p.userId === currentUser?.id && (!selectedCompanyId || p.companyId === selectedCompanyId) && p.description.toLowerCase().includes(filter)
+    ).slice(0, 6);
+  }, [activeSuggestion, userProducts, currentUser?.id, selectedCompanyId]);
+
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (suggestionRef.current && !suggestionRef.current.contains(e.target as Node)) {
+        setActiveSuggestion({ idx: -1, filter: '' });
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 overflow-y-auto">
@@ -286,7 +339,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
               {success ? '¡Comprobante Emitido!' : `Emisión de ${data.documentType === 'factura' ? 'Factura' : 'Boleta'}${!data.sendToSunat ? ' Interna' : ''} Electrónica`}
             </h3>
           </div>
-          {!emitting && !success && (
+          {!emitting && (
             <button onClick={onClose} className="text-white hover:rotate-90 transition-transform"><X className="w-6 h-6" /></button>
           )}
         </div>
@@ -319,38 +372,8 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
               <div className="space-y-2">
                 <h4 className="text-xl font-black text-green-900 uppercase">{data.documentType === 'factura' ? 'Factura' : 'Boleta'} Emitida</h4>
                 <p className="text-sm text-gray-500 font-bold">{data.serie}-{typeof data.correlative === 'number' ? padCorrelative(data.correlative) : ''}</p>
-                {!data.sendToSunat ? (
-                  <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 rounded-full border border-amber-200 text-xs font-bold text-amber-700">
-                    <CloudOff className="w-4 h-4" /> Interno — No enviado a SUNAT
-                  </div>
-                ) : verificando ? (
-                  <div className="flex items-center justify-center gap-2 text-xs text-gray-500"><Loader2 className="w-4 h-4 animate-spin" /> Verificando con SUNAT...</div>
-                ) : (<>
-                  {consultaCpe ? (
-                      <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-bold ${
-                        consultaCpe.statusCode === '0' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-amber-50 border-amber-200 text-amber-700'
-                      }`}>
-                        {consultaCpe.statusCode === '0' ? '✅' : '⚠️'} SUNAT: Código {consultaCpe.statusCode || 'N/A'} — {consultaCpe.description || (consultaCpe.statusCode === '0' ? 'Aceptado' : 'Ver respuesta')}
-                      </div>
-                    ) : cdrInfo ? (
-                      <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 rounded-full border border-green-200 text-xs font-bold text-green-700">
-                        CDR: {cdrInfo.code} — {cdrInfo.description || 'Aceptado'}
-                      </div>
-                    ) : null}
-                  </>
-                )}
-                {sunatResponse && (
-                  <details className="text-left bg-gray-50 rounded-xl border border-gray-200 overflow-hidden">
-                    <summary className="text-[10px] font-bold text-gray-500 uppercase p-3 cursor-pointer hover:bg-gray-100">Ver respuesta SUNAT</summary>
-                    <pre className="text-[9px] text-gray-700 p-3 max-h-48 overflow-auto whitespace-pre-wrap break-all">{sunatResponse}</pre>
-                  </details>
-                )}
-                {consultaCpe?.raw && (
-                  <details className="text-left bg-blue-50 rounded-xl border border-blue-200 overflow-hidden">
-                    <summary className="text-[10px] font-bold text-blue-600 uppercase p-3 cursor-pointer hover:bg-blue-100">Ver Consulta CPE (raw)</summary>
-                    <pre className="text-[9px] text-gray-700 p-3 max-h-32 overflow-auto whitespace-pre-wrap break-all">{consultaCpe.raw}</pre>
-                  </details>
-                )}
+
+
               </div>
               <button onClick={onClose}
                 className="w-full py-4 bg-green-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-green-700 transition">
@@ -418,9 +441,9 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                   <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider">Datos del Comprobante</h4>
                   <div className="flex gap-2">
                     {(['factura', 'boleta'] as const).map(t => {
-                      const serie = t === 'factura' ? (currentUser?.serieFactura || 'F001') : (currentUser?.serieBoleta || 'B001');
+                      const serie = t === 'factura' ? (selectedCompany?.serieFactura || 'F001') : (selectedCompany?.serieBoleta || 'B001');
                       const handleClick = () => {
-                        const next = currentUser?.id ? getNextCorrelative(currentUser.id, serie) : 1;
+                        const next = selectedCompanyId ? getNextCorrelative(selectedCompanyId, serie) : 1;
                         update({ documentType: t, serie, correlative: next });
                       };
                       return (
@@ -453,7 +476,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                         }`}
                         value={data.serie} onChange={e => {
                           const newSerie = e.target.value.toUpperCase();
-                          const next = currentUser?.id ? getNextCorrelative(currentUser.id, newSerie) : 1;
+                          const next = selectedCompanyId ? getNextCorrelative(selectedCompanyId, newSerie) : 1;
                           update({ serie: newSerie, correlative: next });
                         }} />
                       {(data.documentType === 'factura' && !data.serie.startsWith('F')) &&
@@ -509,10 +532,15 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                 <div className="space-y-5">
                   <div className="flex items-center justify-between">
                     <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider">Detalle de Items</h4>
-                    <button type="button" onClick={addItem}
-                      className="flex items-center gap-1 px-3 py-2 bg-brand-100 text-brand-700 rounded-lg text-[10px] font-black uppercase hover:bg-brand-200 transition">
-                      <Plus className="w-3 h-3" /> Agregar Item
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {currentUser && userProducts?.filter(p => p.userId === currentUser.id).length > 0 && (
+                        <span className="text-[8px] font-black text-brand-600 bg-brand-50 px-2 py-1 rounded-lg">{userProducts.filter(p => p.userId === currentUser.id).length} productos guardados</span>
+                      )}
+                      <button type="button" onClick={addItem}
+                        className="flex items-center gap-1 px-3 py-2 bg-brand-100 text-brand-700 rounded-lg text-[10px] font-black uppercase hover:bg-brand-200 transition">
+                        <Plus className="w-3 h-3" /> Agregar Item
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-3">
                     {data.items.map((item, idx) => (
@@ -528,9 +556,9 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                         <div className="grid grid-cols-12 gap-2">
                           <div className="col-span-2">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Cant.</label>
-                            <input type="number" min={1} step={1} placeholder="1"
-                              className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
-                              value={item.quantity} onChange={e => updateItem(idx, { quantity: parseInt(e.target.value) || 0 })} />
+                             <input type="number" min={1} step={1} placeholder="1"
+                               className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
+                               value={item.quantity || ''} onChange={e => updateItem(idx, { quantity: e.target.value === '' ? 0 : parseInt(e.target.value) })} />
                           </div>
                           <div className="col-span-2">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Und.</label>
@@ -544,9 +572,52 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                           </div>
                           <div className="col-span-4">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">Descripción</label>
-                            <input type="text" placeholder="Servicio / Producto"
-                              className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
-                              value={item.description} onChange={e => updateItem(idx, { description: e.target.value })} />
+                            <div className="relative">
+                              <input type="text" placeholder="Servicio / Producto"
+                                className="w-full bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-brand-600"
+                                value={item.description}
+                                onChange={e => {
+                                  updateItem(idx, { description: e.target.value });
+                                  setActiveSuggestion({ idx, filter: e.target.value });
+                                }}
+                                onFocus={() => setActiveSuggestion({ idx, filter: item.description })}
+                                onKeyDown={e => {
+                                  const suggestions = userProductSuggestions;
+                                  if (!suggestions.length) return;
+                                  if (e.key === 'ArrowDown') {
+                                    e.preventDefault();
+                                    const next = ((activeSuggestion.filter === '__SELECTED__' ? -1 : 0) + 1) % (suggestions.length + 1) - 1;
+                                    if (next < 0) setActiveSuggestion({ idx, filter: '__SELECTED__' });
+                                    else setActiveSuggestion({ idx, filter: suggestions[next].description });
+                                  } else if (e.key === 'ArrowUp') {
+                                    e.preventDefault();
+                                    setActiveSuggestion({ idx, filter: '' });
+                                  } else if (e.key === 'Enter' && suggestions.length > 0 && activeSuggestion.filter !== item.description) {
+                                    e.preventDefault();
+                                    const selected = suggestions.find(s => s.description === activeSuggestion.filter) || suggestions[0];
+                                    updateItem(idx, { description: selected.description, unit: selected.unit, unitPrice: selected.unitPrice });
+                                    setActiveSuggestion({ idx: -1, filter: '' });
+                                  }
+                                }} />
+                              {activeSuggestion.idx === idx && userProductSuggestions.length > 0 && (
+                                <div ref={suggestionRef}
+                                  className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border-2 border-gray-200 rounded-xl shadow-xl max-h-44 overflow-y-auto">
+                                  {userProductSuggestions.map((p, si) => (
+                                    <div key={p.id} className={`flex items-center gap-1 px-3 py-2 text-xs font-bold hover:bg-brand-50 transition ${activeSuggestion.filter === p.description ? 'bg-brand-100' : ''}`}>
+                                      <button type="button" className="flex-1 text-left min-w-0"
+                                        onMouseDown={e => { e.preventDefault(); updateItem(idx, { description: p.description, unit: p.unit, unitPrice: p.unitPrice }); setActiveSuggestion({ idx: -1, filter: '' }); }}>
+                                        <span className="text-gray-900">{p.description}</span>
+                                        <span className="text-gray-400 ml-2">S/ {p.unitPrice.toFixed(2)}</span>
+                                      </button>
+                                      <button type="button" onMouseDown={e => { e.preventDefault(); removeUserProduct(p.id); }}
+                                        className="p-0.5 text-gray-300 hover:text-red-500 transition shrink-0">
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </div>
                           <div className="col-span-2">
                             <label className="text-[8px] font-black text-gray-400 uppercase mb-1 block">V. Unit.</label>
@@ -555,25 +626,20 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                               value={item.unitPrice}
                               onChange={e => {
                                 let val = e.target.value;
-                                // Allow only digits and a single dot
                                 val = val.replace(/[^0-9.]/g, '');
                                 const parts = val.split('.');
                                 if (parts.length > 2) {
                                   val = parts[0] + '.' + parts.slice(1).join('');
                                 }
-                                // Convert bare dot to "0."
                                 if (val === '.') {
                                   val = '0.';
                                 }
-                                // Remove leading zeros if it starts with '0' followed by a digit
-                                // e.g. "02" -> "2", "005" -> "5", but "0.5" -> "0.5"
                                 if (/^0[0-9]/.test(val)) {
                                   val = val.replace(/^0+/, '');
                                   if (val.startsWith('.')) {
                                     val = '0' + val;
                                   }
                                 }
-                                // Prevent multiple zeros at the start like "00"
                                 if (val === '00') {
                                   val = '0';
                                 }
@@ -648,7 +714,7 @@ export const InvoiceWizard: React.FC<Props> = ({ onClose, onEmitted }) => {
                     ) : data.sendToSunat ? (
                       <><Globe className="w-4 h-4 mr-2" /> Emitir</>
                     ) : (
-                      <><FileText className="w-4 h-4 mr-2" /> Emitir como Interno (sin SUNAT)</>
+                      <><FileText className="w-4 h-4 mr-2" /> Emitir</>
                     )}
                   </button>
                 </div>
