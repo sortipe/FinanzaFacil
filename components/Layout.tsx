@@ -10,12 +10,9 @@ interface LayoutProps {
 }
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
-  const { currentUser, logout, updateUser, sunatGlobalConfig } = useStore();
+  const { currentUser, logout, updateUser, sunatGlobalConfig, addComplaint } = useStore();
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [verificationStatus, setVerificationStatus] = useState<'idle' | 'success' | 'error'>('idle');
-  const [verificationMsg, setVerificationMsg] = useState('');
   const [showComplaintModal, setShowComplaintModal] = useState(false);
   const [complaintForm, setComplaintForm] = useState({
     type: 'RECLAMO' as 'RECLAMO' | 'QUEJA',
@@ -23,7 +20,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     detail: ''
   });
   const [complaintSuccess, setComplaintSuccess] = useState(false);
-  const { addComplaint } = useStore();
   
   const [formData, setFormData] = useState({
     name: '',
@@ -67,55 +63,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     }, 1500);
   };
   
-  const handleVerifyCredentials = async () => {
-    if (!formData.ruc || formData.ruc.length !== 11) {
-        setVerificationStatus('error');
-        setVerificationMsg('Ingresa un RUC válido (11 dígitos)');
-        return;
-    }
-    if (!formData.solUser || !formData.solPass) {
-        setVerificationStatus('error');
-        setVerificationMsg('Usuario y Clave SOL son obligatorios');
-        return;
-    }
-    
-    // Always use global token now that user field is removed
-    const activeToken = sunatGlobalConfig.sunatToken;
-    
-    if (!activeToken) {
-        setVerificationStatus('error');
-        setVerificationMsg('Falta Token Maestro en Panel Admin');
-        return;
-    }
-    
-    setIsVerifying(true);
-    setVerificationStatus('idle');
-    setVerificationMsg('Validando con APISUNAT...');
-    
-    try {
-        // En un entorno real, aquí se llamaría a un endpoint de APISUNAT que valide 
-        // la combinación de RUC + SOL User + SOL Pass + Token.
-        // Por ahora usamos la validación de token existente y simulamos el éxito.
-        const isValid = await sunatService.verifyCredentials(activeToken);
-        
-        // Simulamos un pequeño delay para que el usuario vea que se está procesando
-        await new Promise(resolve => setTimeout(resolve, 800));
-
-        if (isValid) {
-            setVerificationStatus('success');
-            setVerificationMsg(`¡Vínculo Exitoso con RUC ${formData.ruc}!`);
-        } else {
-            setVerificationStatus('error');
-            setVerificationMsg('Token Maestro inválido o expirado');
-        }
-    } catch (error) {
-        setVerificationStatus('error');
-        setVerificationMsg('Error de red al conectar con SUNAT');
-    } finally {
-        setIsVerifying(false);
-    }
-  };
-
   const handleComplaintSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;

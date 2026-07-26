@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
-import { Expense, TaxDocument, PendingInvoice, UserRole, SubscriptionStatus } from '../types';
-import { Plus, Camera, Loader2, DollarSign, Search, Calendar, Tag, Image as ImageIcon, X, Clock, PieChart as PieChartIcon, BarChart as BarChartIcon, Upload, RefreshCw, Sparkles, Save, Hash, FileText, User, ShieldCheck, Lock, Eye, EyeOff, Download, ChevronDown, FileSpreadsheet, History, DownloadCloud, ExternalLink, PlusCircle, MessageCircleMore, Headphones, TrendingUp, TrendingDown, CalendarDays, CalendarRange, FileInput, ReceiptText, Printer, CheckCircle2, ArrowLeft, Globe, AlertTriangle, ExternalLink as ExtIcon, ShoppingBag, Briefcase, Users, HelpCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Expense, TaxDocument, PendingInvoice, UserRole, SubscriptionStatus, User as UserType } from '../types';
+import { Plus, Camera, Loader2, DollarSign, Search, Calendar, Tag, Image as ImageIcon, X, Clock, PieChart as PieChartIcon, BarChart as BarChartIcon, Upload, RefreshCw, Sparkles, Save, Hash, FileText, User, ShieldCheck, Lock, Eye, EyeOff, Download, ChevronDown, FileSpreadsheet, History, DownloadCloud, ExternalLink, PlusCircle, MessageCircleMore, Headphones, TrendingUp, TrendingDown, CalendarDays, CalendarRange, FileInput, ReceiptText, Printer, CheckCircle2, ArrowLeft, Globe, AlertTriangle, ExternalLink as ExtIcon, ShoppingBag, Briefcase, Users, HelpCircle, ChevronLeft, ChevronRight, Building, UserPlus, UserMinus, Trash2, Trash } from 'lucide-react';
 import { analyzeReceipt, fileToBase64 } from '../services/geminiService';
 import { sunatService } from '../services/sunatService';
 import { consultaService } from '../services/consultaService';
@@ -11,7 +11,7 @@ import { InvoiceWizard } from '../components/InvoiceWizard';
 import { Payment } from '../pages/Payment';
 
 export const UserDashboard: React.FC = () => {
-  const { currentUser, expenses, taxDocuments, addExpense, addTaxDocument, sunatGlobalConfig, pendingInvoices, removePendingInvoice, updatePendingInvoiceStatus, users, registerUser, updateUser, generatePassword, subscriptionHistory } = useStore();
+  const { currentUser, currentSubUser, isSubUser, companies, selectedCompanyId, selectedCompany, selectCompany, addCompany, updateCompany, assignAccountant, expenses, taxDocuments, addExpense, addTaxDocument, deleteTaxDocument, sunatGlobalConfig, pendingInvoices, removePendingInvoice, updatePendingInvoiceStatus, users, registerUser, updateUser, generatePassword, subscriptionHistory, addSubUser, deleteSubUser } = useStore();
   const [isUploading, setIsUploading] = useState(false);
   const [activeView, setActiveView] = useState<'dashboard' | 'settings' | 'history'>('dashboard');
   const [showReceiptModal, setShowReceiptModal] = useState(false);
@@ -33,6 +33,20 @@ export const UserDashboard: React.FC = () => {
   const [accCreated, setAccCreated] = useState(false);
   const [showAccPwd, setShowAccPwd] = useState(false);
 
+  // --- COMPANY CREATION ---
+  const [showCreateCompany, setShowCreateCompany] = useState(false);
+  const [companyForm, setCompanyForm] = useState({ name: '', ruc: '', businessName: '', taxAddress: '' });
+
+  const myCompany = useMemo(() => companies.find(c => c.ownerUserId === currentUser?.id) || null, [companies, currentUser]);
+  const accountants = useMemo(() => users.filter(u => u.role === UserRole.ACCOUNTANT), [users]);
+
+  // --- SUB-USER MANAGEMENT ---
+  const [showCreateSubUser, setShowCreateSubUser] = useState(false);
+  const [subUserForm, setSubUserForm] = useState({ name: '', email: '' });
+  const [subUserPwd, setSubUserPwd] = useState('');
+  const [subUserCreated, setSubUserCreated] = useState(false);
+  const mySubUsers = useMemo(() => users.filter(u => u.parentId === currentUser?.id), [users, currentUser]);
+
   const retryPendingInvoice = async (inv: PendingInvoice) => {
     setRetrying(inv.id);
     updatePendingInvoiceStatus(inv.id, 'ENVIANDO');
@@ -48,6 +62,7 @@ export const UserDashboard: React.FC = () => {
         addTaxDocument({
           id: inv.id,
           userId: inv.userId,
+          companyId: inv.companyId || selectedCompanyId || '',
           accountantId: '',
           name: `${inv.documentType === 'factura' ? 'F' : 'B'}${inv.serie}-${paddedCorr}`,
           fileUrl: '',
@@ -66,6 +81,7 @@ export const UserDashboard: React.FC = () => {
         addExpense({
           id: `exp-${inv.id}-${Date.now()}`,
           userId: inv.userId,
+          companyId: inv.companyId || selectedCompanyId || '',
           amount: inv.amount,
           currency: 'PEN',
           description: inv.customerName ? `${inv.id} - ${inv.customerName}` : inv.id,
@@ -88,6 +104,49 @@ export const UserDashboard: React.FC = () => {
     }
   };
 
+  const handleCreateCompany = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    const newCompany = {
+      id: `comp-${Date.now()}`,
+      ownerUserId: currentUser.id,
+      name: companyForm.name,
+      ruc: companyForm.ruc,
+      businessName: companyForm.businessName,
+      taxAddress: companyForm.taxAddress,
+    };
+    addCompany(newCompany);
+    selectCompany(newCompany.id);
+    setCompanyForm({ name: '', ruc: '', businessName: '', taxAddress: '' });
+    setShowCreateCompany(false);
+  };
+
+  const handleCreateSubUser = async () => {
+    if (!currentUser || !subUserForm.name.trim() || !subUserForm.email.trim()) return;
+    const pwd = subUserPwd || generatePassword();
+    const newSubUser: UserType = {
+      id: `sub-${Date.now()}`,
+      name: subUserForm.name.trim(),
+      email: subUserForm.email.trim(),
+      role: UserRole.SUB_USER,
+      password: pwd,
+      mustChangePassword: true,
+      parentId: currentUser.id,
+    };
+    try {
+      await addSubUser(newSubUser);
+      fetch('/api/send-welcome-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: newSubUser.email, name: newSubUser.name, password: pwd })
+      }).catch(() => {});
+      setSubUserPwd(pwd);
+      setSubUserCreated(true);
+    } catch (err: any) {
+      alert("Error al crear sub-usuario: " + (err.message || "Error de conexión"));
+    }
+  };
+
 
   const handleCreateAccountant = async () => {
     if (!accForm.name.trim() || !accForm.email.trim()) return;
@@ -104,8 +163,8 @@ export const UserDashboard: React.FC = () => {
     };
     try {
       await registerUser(newUser);
-      if (currentUser) {
-        await updateUser(currentUser.id, { assignedAccountantId: newUser.id });
+      if (myCompany) {
+        assignAccountant(myCompany.id, newUser.id);
       }
       fetch('/api/send-welcome-email', {
         method: 'POST',
@@ -277,7 +336,7 @@ export const UserDashboard: React.FC = () => {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [previewInternal, setPreviewInternal] = useState<string | null>(null);
 
-  const myExpenses = useMemo(() => expenses.filter(e => e.userId === currentUser?.id), [expenses, currentUser]);
+  const myExpenses = useMemo(() => expenses.filter(e => e.userId === currentUser?.id && (!selectedCompanyId || e.companyId === selectedCompanyId)), [expenses, currentUser, selectedCompanyId]);
 
   const stats = useMemo(() => {
     const now = new Date();
@@ -333,6 +392,7 @@ export const UserDashboard: React.FC = () => {
     addExpense({
       id: Date.now().toString(),
       userId: currentUser.id,
+      companyId: selectedCompanyId || '',
       amount: parseFloat(amount),
       currency: 'PEN',
       description,
@@ -356,10 +416,10 @@ export const UserDashboard: React.FC = () => {
 
   const handleOfficialSync = async () => {
     setSyncError('');
-    const activeToken = currentUser?.sunatToken || sunatGlobalConfig.sunatToken;
+    const activeToken = selectedCompany?.sunatToken || sunatGlobalConfig.sunatToken;
     
-    if (!currentUser?.solUser || !currentUser?.solPass) {
-      setSyncError("Credenciales SOL (usuario y contraseña) no configuradas en tu cuenta.");
+    if (!selectedCompany?.solUser || !selectedCompany?.solPass) {
+      setSyncError("Credenciales SOL (usuario y contraseña) no configuradas en la empresa seleccionada.");
       return;
     }
     if (!activeToken) {
@@ -374,15 +434,15 @@ export const UserDashboard: React.FC = () => {
       const response = await sunatService.emitirReciboHonorarios(
         receiptForm, 
         activeToken,
-        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
+        selectedCompany?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
         {
-          ruc: currentUser?.ruc,
-          user: currentUser?.solUser,
-          pass: currentUser?.solPass,
-          certBase64: currentUser?.certBase64,
-          certPass: currentUser?.certPass,
-          emitterName: currentUser?.businessName,
-          env: 'PRODUCTION'
+          ruc: selectedCompany?.ruc,
+          user: selectedCompany?.solUser,
+          pass: selectedCompany?.solPass,
+          certBase64: selectedCompany?.certBase64,
+          certPass: selectedCompany?.certPass,
+          emitterName: selectedCompany?.businessName,
+          env: selectedCompany?.sunatEnv || 'PRODUCTION'
         }
       );
 
@@ -405,10 +465,10 @@ export const UserDashboard: React.FC = () => {
 
   const handleInvoiceOfficialSync = async () => {
     setSyncError('');
-    const activeToken = currentUser?.sunatToken || sunatGlobalConfig.sunatToken;
+    const activeToken = selectedCompany?.sunatToken || sunatGlobalConfig.sunatToken;
 
-    if (!currentUser?.solUser || !currentUser?.solPass) {
-      setSyncError("Credenciales SOL (usuario y contraseña) no configuradas en tu cuenta.");
+    if (!selectedCompany?.solUser || !selectedCompany?.solPass) {
+      setSyncError("Credenciales SOL (usuario y contraseña) no configuradas en la empresa seleccionada.");
       return;
     }
     if (!activeToken) {
@@ -435,15 +495,15 @@ export const UserDashboard: React.FC = () => {
           total: parseFloat(invoiceForm.amount)
         }, 
         activeToken,
-        currentUser?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
+        selectedCompany?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
         {
-          ruc: currentUser?.ruc,
-          user: currentUser?.solUser,
-          pass: currentUser?.solPass,
-          certBase64: currentUser?.certBase64,
-          certPass: currentUser?.certPass,
-          emitterName: currentUser?.businessName,
-          env: 'PRODUCTION'
+          ruc: selectedCompany?.ruc,
+          user: selectedCompany?.solUser,
+          pass: selectedCompany?.solPass,
+          certBase64: selectedCompany?.certBase64,
+          certPass: selectedCompany?.certPass,
+          emitterName: selectedCompany?.businessName,
+          env: selectedCompany?.sunatEnv || 'PRODUCTION'
         },
         invoiceForm.serie,
         invoiceForm.currency
@@ -489,7 +549,8 @@ export const UserDashboard: React.FC = () => {
     const newDoc: TaxDocument = {
       id: `${type}-${Date.now()}`,
       userId: currentUser.id,
-      accountantId: (users.find(u => u.id === currentUser.id)?.assignedAccountantId) || currentUser.assignedAccountantId || '',
+      companyId: selectedCompanyId || '',
+      accountantId: selectedCompany?.assignedAccountantId || '',
       name: type === 'RH' ? `R. Honorarios E001-${Math.floor(Math.random()*10000)}` : `Factura F001-${Math.floor(Math.random()*10000)}`,
       fileUrl: pdfUrl, // URL real proporcionada por la API
       pdfUrl: pdfUrl,
@@ -512,6 +573,7 @@ export const UserDashboard: React.FC = () => {
     addExpense({
       id: `EXP-${Date.now()}`,
       userId: currentUser.id,
+      companyId: selectedCompanyId || '',
       amount: total,
       currency: 'PEN',
       description: `${type === 'RH' ? 'Recibo' : 'Factura'} a ${form.recipientName}`,
@@ -548,12 +610,13 @@ export const UserDashboard: React.FC = () => {
       } catch {}
     }
 
-    const activeAccId = (users.find(u => u.id === currentUser.id)?.assignedAccountantId) || currentUser.assignedAccountantId || '';
+    const activeAccId = selectedCompany?.assignedAccountantId || '';
 
     const isInternal = result.sunatStatus === 'INTERNO';
     const newDoc: TaxDocument = {
       id: result.id,
       userId: currentUser.id,
+      companyId: selectedCompanyId || '',
       accountantId: activeAccId,
       name: result.name,
       fileUrl: '',
@@ -568,7 +631,7 @@ export const UserDashboard: React.FC = () => {
       periodYear: new Date().getFullYear(),
       sunatStatus: isInternal ? 'INTERNO' : (result.sunatStatus === 'ACEPTADO' || result.sunatStatus === 'SENT') ? 'SENT' : 'PENDING',
       sunatHash: (result.sunatStatus === 'ACEPTADO' || result.sunatStatus === 'SENT') ? Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join('') : undefined,
-      metadata: { amount: result.amount, customerName: result.customerName }
+      metadata: { amount: result.amount, recipientName: result.customerName, recipientRuc: '', description: '', retention: 0, netAmount: result.amount || 0, date: '' }
     };
 
     addTaxDocument(newDoc);
@@ -577,6 +640,7 @@ export const UserDashboard: React.FC = () => {
       addExpense({
         id: `exp-${result.id}-${Date.now()}`,
         userId: currentUser.id,
+        companyId: selectedCompanyId || '',
         amount: result.amount,
         currency: 'PEN',
         description: `${result.name}${result.customerName ? ' - ' + result.customerName : ''}`,
@@ -591,6 +655,7 @@ export const UserDashboard: React.FC = () => {
   if (!currentUser) return null;
   const filteredDocs = taxDocuments.filter(d => {
     if (d.userId !== currentUser.id) return false;
+    if (selectedCompanyId && d.companyId !== selectedCompanyId) return false;
     if (docFilter === 'all') return true;
     if (docFilter === 'contador') return d.uploadedBy === 'ACCOUNTANT';
     if (docFilter === 'rh') return d.id.startsWith('RH-');
@@ -606,8 +671,31 @@ export const UserDashboard: React.FC = () => {
           <h2 className="text-2xl font-bold text-gray-900">Hola, {currentUser.name}</h2>
           <p className="text-gray-500 text-sm font-medium tracking-tight">Gestiona tus finanzas personales y tributarias</p>
         </div>
+
+        {companies.length > 0 && (
+          <div className="flex items-center gap-2">
+            <Briefcase className="w-4 h-4 text-gray-400" />
+            <select
+              value={selectedCompanyId || ''}
+              onChange={(e) => selectCompany(e.target.value || null)}
+              className="bg-white border-2 border-gray-200 px-3 py-2 rounded-xl text-sm font-bold outline-none focus:border-brand-500 transition"
+            >
+              {companies.map(c => (
+                <option key={c.id} value={c.id}>{c.name}{c.ruc ? ` (${c.ruc})` : ''}</option>
+              ))}
+            </select>
+            <button onClick={() => setShowCreateCompany(true)} className="p-2 bg-brand-50 text-brand-600 rounded-xl hover:bg-brand-100 transition" title="Nueva empresa">
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+        {companies.length === 0 && (
+          <button onClick={() => setShowCreateCompany(true)} className="bg-brand-600 text-white px-5 py-3 rounded-2xl hover:bg-brand-700 transition flex items-center font-black text-xs uppercase tracking-widest shadow-xl active:scale-95">
+            <Building className="w-4 h-4 mr-2" /> Crear Mi Empresa
+          </button>
+        )}
         
-        {(!currentUser.solUser && !currentUser.user || !currentUser.solPass && !currentUser.pass) && (
+        {selectedCompanyId && selectedCompany && (!selectedCompany.solUser || !selectedCompany.solPass) && (
           <div className="flex-1 bg-amber-50 border-2 border-amber-200 p-4 rounded-2xl flex items-center animate-pulse">
             <AlertTriangle className="w-5 h-5 text-amber-600 mr-3 shrink-0" />
             <div>
@@ -618,31 +706,41 @@ export const UserDashboard: React.FC = () => {
         )}
 
         <div className="flex flex-col lg:flex-row gap-4 w-full lg:w-auto items-center">
-          {/* Bloque Ingresos */}
-          <div className="flex items-center gap-2 bg-white/60 backdrop-blur-md p-1.5 rounded-[2rem] border border-gray-100 shadow-sm w-full lg:w-auto">
-             <div className="px-4 py-2 rounded-2xl bg-brand-50 text-brand-700 font-black text-[10px] uppercase tracking-widest flex items-center">
-                <TrendingUp className="w-4 h-4 mr-2" /> INGRESOS
-             </div>
-             <div className="flex gap-1.5">
-                <button onClick={() => setShowInvoiceModal(true)} className="bg-brand-700 text-white px-4 py-2.5 rounded-xl hover:bg-brand-900 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
-                  <FileInput className="w-3.5 h-3.5 mr-1.5" /> FACTURACIÓN
-                </button>
-                <button onClick={() => setShowReceiptModal(true)} className="bg-blue-600 text-white px-4 py-2.5 rounded-xl hover:bg-blue-700 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
-                  <ReceiptText className="w-3.5 h-3.5 mr-1.5" /> RECIBO RH
-                </button>
-             </div>
-          </div>
+          {!isSubUser && (
+            <>
+              {/* Bloque Ingresos */}
+              <div className="flex items-center gap-2 bg-white/60 backdrop-blur-md p-1.5 rounded-[2rem] border border-gray-100 shadow-sm w-full lg:w-auto">
+                 <div className="px-4 py-2 rounded-2xl bg-brand-50 text-brand-700 font-black text-[10px] uppercase tracking-widest flex items-center">
+                    <TrendingUp className="w-4 h-4 mr-2" /> INGRESOS
+                 </div>
+                 <div className="flex gap-1.5">
+                    <button onClick={() => setShowInvoiceModal(true)} className="bg-brand-700 text-white px-4 py-2.5 rounded-xl hover:bg-brand-900 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
+                      <FileInput className="w-3.5 h-3.5 mr-1.5" /> FACTURACIÓN
+                    </button>
+                    <button onClick={() => setShowReceiptModal(true)} className="bg-blue-600 text-white px-4 py-2.5 rounded-xl hover:bg-blue-700 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
+                      <ReceiptText className="w-3.5 h-3.5 mr-1.5" /> RECIBO RH
+                    </button>
+                 </div>
+              </div>
 
-          {/* Bloque Egresos */}
-          <div className="flex items-center gap-2 bg-white/60 backdrop-blur-md p-1.5 rounded-[2rem] border border-gray-100 shadow-sm w-full lg:w-auto">
-             <div className="px-4 py-2 rounded-2xl bg-orange-50 text-orange-600 font-black text-[10px] uppercase tracking-widest flex items-center">
-                <TrendingDown className="w-4 h-4 mr-2" /> EGRESOS
-             </div>
-             <button onClick={() => setIsUploading(!isUploading)} className={`px-5 py-2.5 rounded-xl transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95 ${isUploading ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
-                {isUploading ? <X className="w-3.5 h-3.5 mr-1.5"/> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
-                {isUploading ? 'Cerrar' : 'SUBIR GASTO'}
-             </button>
-          </div>
+              {/* Bloque Egresos */}
+              <div className="flex items-center gap-2 bg-white/60 backdrop-blur-md p-1.5 rounded-[2rem] border border-gray-100 shadow-sm w-full lg:w-auto">
+                 <div className="px-4 py-2 rounded-2xl bg-orange-50 text-orange-600 font-black text-[10px] uppercase tracking-widest flex items-center">
+                    <TrendingDown className="w-4 h-4 mr-2" /> EGRESOS
+                 </div>
+                 <button onClick={() => setIsUploading(!isUploading)} className={`px-5 py-2.5 rounded-xl transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95 ${isUploading ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
+                    {isUploading ? <X className="w-3.5 h-3.5 mr-1.5"/> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                    {isUploading ? 'Cerrar' : 'SUBIR GASTO'}
+                 </button>
+              </div>
+            </>
+          )}
+          {isSubUser && (
+            <div className="bg-blue-50 border-2 border-blue-200 px-4 py-2.5 rounded-2xl flex items-center gap-2">
+              <Eye className="w-4 h-4 text-blue-600" />
+              <span className="text-[10px] font-black text-blue-700 uppercase">Modo solo lectura</span>
+            </div>
+          )}
 
           <button 
             onClick={() => setActiveView(activeView === 'dashboard' ? 'settings' : 'dashboard')} 
@@ -660,10 +758,85 @@ export const UserDashboard: React.FC = () => {
       </header>
 
       {activeView === 'settings' ? (
-        <div className="animate-fade-in-up">
-           <button onClick={() => setActiveView('dashboard')} className="mb-6 flex items-center gap-2 text-sm font-bold text-gray-500 hover:text-gray-800 transition">
+        <div className="animate-fade-in-up space-y-6">
+           <button onClick={() => setActiveView('dashboard')} className="mb-2 flex items-center gap-2 text-sm font-bold text-gray-500 hover:text-gray-800 transition">
              <ArrowLeft className="w-4 h-4" /> Volver al Dashboard
            </button>
+
+           {myCompany && (
+             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 space-y-4">
+               <div className="flex items-center justify-between">
+                 <div className="flex items-center gap-3">
+                   <div className="p-3 bg-brand-50 rounded-2xl text-brand-600"><Building className="w-5 h-5"/></div>
+                   <div>
+                     <h3 className="font-black text-gray-900 text-sm uppercase tracking-tighter">{myCompany.name}</h3>
+                     <p className="text-[10px] text-gray-400 font-bold">RUC: {myCompany.ruc || 'No registrado'}</p>
+                   </div>
+                 </div>
+               </div>
+               <div className="pt-4 border-t border-gray-100">
+                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Contador Asignado</label>
+                 {accountants.length === 0 ? (
+                   <p className="text-xs text-gray-400 italic">No hay contadores disponibles. Puedes crear uno desde el botón "Crear Contador".</p>
+                 ) : (
+                   <div className="flex items-center gap-3">
+                     <select
+                       value={myCompany.assignedAccountantId || ''}
+                       onChange={e => assignAccountant(myCompany.id, e.target.value || '')}
+                       className="flex-1 bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-brand-600"
+                     >
+                       <option value="">Sin contador asignado</option>
+                       {accountants.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                     </select>
+                     <button onClick={() => setShowCreateAccountant(true)} className="p-3 bg-brand-50 text-brand-600 rounded-xl hover:bg-brand-100 transition" title="Crear nuevo contador">
+                       <UserPlus className="w-4 h-4" />
+                     </button>
+                   </div>
+                 )}
+               </div>
+             </div>
+           )}
+
+           {/* SUB-USUARIOS */}
+           {!isSubUser && (
+             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 space-y-4">
+               <div className="flex items-center justify-between">
+                 <div className="flex items-center gap-3">
+                   <div className="p-3 bg-blue-50 rounded-2xl text-blue-600"><Users className="w-5 h-5"/></div>
+                   <div>
+                     <h3 className="font-black text-gray-900 text-sm uppercase tracking-tighter">Sub Usuarios</h3>
+                     <p className="text-[10px] text-gray-400 font-bold">Cuentas de solo lectura y descarga</p>
+                   </div>
+                 </div>
+                 <button onClick={() => { setSubUserPwd(generatePassword()); setSubUserCreated(false); setSubUserForm({ name: '', email: '' }); setShowCreateSubUser(true); }}
+                   className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition flex items-center font-black text-[10px] uppercase tracking-widest shadow-sm active:scale-95">
+                   <UserPlus className="w-3.5 h-3.5 mr-1.5" /> Nuevo Sub Usuario
+                 </button>
+               </div>
+               {mySubUsers.length === 0 ? (
+                 <p className="text-xs text-gray-400 italic py-4">No hay sub usuarios creados. Los sub usuarios pueden ver y descargar archivos pero no pueden modificar datos.</p>
+               ) : (
+                 <div className="space-y-2">
+                   {mySubUsers.map(sub => (
+                     <div key={sub.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                       <div className="flex items-center gap-3">
+                         <div className="p-2 bg-blue-100 rounded-lg"><User className="w-4 h-4 text-blue-600"/></div>
+                         <div>
+                           <p className="text-xs font-black text-gray-900 uppercase">{sub.name}</p>
+                           <p className="text-[9px] text-gray-400 font-bold">{sub.email}</p>
+                         </div>
+                       </div>
+                       <button onClick={() => { if(confirm('¿Eliminar este sub usuario?')) deleteSubUser(sub.id); }}
+                         className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition">
+                         <UserMinus className="w-4 h-4" />
+                       </button>
+                     </div>
+                   ))}
+                 </div>
+               )}
+             </div>
+           )}
+
            <SunatSettings />
         </div>
       ) : activeView === 'history' ? (
@@ -1127,8 +1300,14 @@ export const UserDashboard: React.FC = () => {
                         <p className="text-[11px] font-black text-gray-900 truncate uppercase tracking-tighter leading-none">{doc.name}</p>
                         <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">{doc.uploadedBy === 'ACCOUNTANT' ? 'De tu contador' : doc.id.startsWith('RH-') ? 'C. Electrónico' : (doc.id.startsWith('FACTURA-') || doc.id.startsWith('F') || doc.id.startsWith('B')) ? 'Comprobante Electrónico' : 'Declaración Mensual'} · {doc.periodMonth} {doc.periodYear}</p>
                      </div>
-                     {doc.uploadedBy === 'ACCOUNTANT' ? <span className="text-[8px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><User className="w-2.5 h-2.5 mr-1"/> CONT</span> : doc.sunatStatus === 'SENT' ? <span className="text-[8px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><CheckCircle2 className="w-2.5 h-2.5 mr-1"/> OK</span> : <span className="text-[8px] bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-black uppercase shrink-0">Enviado</span>}
-                  </div>
+                      {doc.uploadedBy === 'ACCOUNTANT' ? <span className="text-[8px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><User className="w-2.5 h-2.5 mr-1"/> CONT</span> : doc.sunatStatus === 'SENT' ? <span className="text-[8px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-black uppercase flex items-center shrink-0"><CheckCircle2 className="w-2.5 h-2.5 mr-1"/> OK</span> : <span className="text-[8px] bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-black uppercase shrink-0">Enviado</span>}
+                      {!isSubUser && (
+                        <button onClick={(e) => { e.stopPropagation(); if(confirm('¿Eliminar este documento?')) deleteTaxDocument(doc.id); }}
+                          className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0 opacity-0 group-hover:opacity-100">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                   </div>
                 ))}
             </div>
         </div>
@@ -1156,7 +1335,7 @@ export const UserDashboard: React.FC = () => {
                 </div>
                 <div className="flex justify-between border-b-2 border-brand-500 pb-4 relative z-10">
                    <h1 className="text-xl font-black text-brand-600 uppercase italic">Control Tributario</h1>
-                   <div className="text-right"><p className="text-[10px] font-black uppercase text-gray-400 leading-none">RUC Emisor</p><p className="text-sm font-mono font-black text-gray-800">{currentUser.ruc}</p></div>
+                   <div className="text-right"><p className="text-[10px] font-black uppercase text-gray-400 leading-none">RUC Emisor</p><p className="text-sm font-mono font-black text-gray-800">{selectedCompany?.ruc}</p></div>
                 </div>
                  <div className="space-y-6 relative z-10 font-bold text-gray-700">
                     <div className="grid grid-cols-2 gap-8 text-xs">
@@ -1241,6 +1420,122 @@ export const UserDashboard: React.FC = () => {
       onClose={() => setShowInvoiceModal(false)}
       onEmitted={handleInvoiceEmitted}
     />
+  )}
+
+  {/* MODAL CREAR SUB USUARIO */}
+  {showCreateSubUser && (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 overflow-y-auto">
+      <div className="bg-white rounded-[2rem] w-full max-w-md overflow-hidden shadow-2xl relative">
+        <div className="p-6 bg-blue-600 text-white flex justify-between items-center">
+          <div className="flex items-center space-x-3">
+            <Users className="w-6 h-6"/>
+            <h3 className="text-base font-black uppercase tracking-wide">Crear Sub Usuario</h3>
+          </div>
+          <button onClick={() => setShowCreateSubUser(false)} className="text-white hover:rotate-90 transition"><X className="w-5 h-5"/></button>
+        </div>
+        {subUserCreated ? (
+          <div className="p-6 text-center space-y-4">
+            <div className="p-4 bg-green-100 rounded-full w-fit mx-auto"><CheckCircle2 className="w-10 h-10 text-green-600"/></div>
+            <p className="font-black text-gray-800 text-lg">{subUserForm.name}</p>
+            <p className="text-xs text-gray-500">{subUserForm.email}</p>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-left space-y-1">
+              <p className="text-[10px] font-black text-blue-700 uppercase">Contraseña generada</p>
+              <p className="text-sm font-mono font-black text-gray-800 select-all">{subUserPwd}</p>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-left">
+              <p className="text-[9px] font-black text-amber-700 uppercase">Permisos</p>
+              <p className="text-[10px] text-gray-600">Solo lectura y descarga de archivos. No puede crear ni modificar datos.</p>
+            </div>
+            <p className="text-[10px] text-gray-400 font-bold">Se ha enviado un correo de bienvenida con las credenciales.</p>
+            <button onClick={() => setShowCreateSubUser(false)}
+              className="w-full py-3 bg-blue-600 text-white rounded-xl font-black uppercase text-xs tracking-widest hover:bg-blue-700 transition shadow-sm">
+              Cerrar
+            </button>
+          </div>
+        ) : (
+          <div className="p-6 space-y-5">
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+              <p className="text-[9px] font-black text-blue-700 uppercase">Permisos del sub usuario</p>
+              <p className="text-[10px] text-gray-600">Solo podrá ver datos, documentos y descargar archivos. No podrá crear, editar ni eliminar nada.</p>
+            </div>
+            <div>
+              <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Nombre</label>
+              <input type="text" placeholder="Ej: Asistente Contable"
+                className="w-full border-2 border-gray-200 p-3 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-blue-600"
+                value={subUserForm.name} onChange={e => setSubUserForm(p => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Correo Electrónico</label>
+              <input type="email" placeholder="correo@ejemplo.com"
+                className="w-full border-2 border-gray-200 p-3 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-blue-600"
+                value={subUserForm.email} onChange={e => setSubUserForm(p => ({ ...p, email: e.target.value }))} />
+            </div>
+            <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+              <p className="text-[8px] font-black text-gray-400 uppercase">Contraseña</p>
+              <div className="flex items-center gap-2 mt-1">
+                <div className="flex-1 relative">
+                  <input type="password" readOnly
+                    className="w-full bg-white border border-gray-200 p-2 rounded-lg text-xs font-mono font-bold text-gray-800"
+                    value={subUserPwd} />
+                </div>
+                <button onClick={() => setSubUserPwd(generatePassword())} className="p-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition shrink-0" title="Generar nueva">
+                  <RefreshCw className="w-4 h-4 text-gray-600" />
+                </button>
+              </div>
+            </div>
+            <button onClick={handleCreateSubUser} disabled={!subUserForm.name.trim() || !subUserForm.email.trim()}
+              className="w-full py-3 bg-blue-600 text-white rounded-xl font-black uppercase text-xs tracking-widest shadow-sm hover:bg-blue-700 transition disabled:opacity-50 flex items-center justify-center gap-2">
+              <UserPlus className="w-4 h-4" /> Crear Sub Usuario
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )}
+
+  {/* MODAL CREAR EMPRESA */}
+  {showCreateCompany && (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 overflow-y-auto">
+      <div className="bg-white rounded-[2rem] w-full max-w-md overflow-hidden shadow-2xl relative">
+        <div className="p-6 bg-brand-600 text-white flex justify-between items-center">
+          <div className="flex items-center space-x-3">
+            <Building className="w-6 h-6"/>
+            <h3 className="text-base font-black uppercase tracking-wide">Crear Mi Empresa</h3>
+          </div>
+          <button onClick={() => setShowCreateCompany(false)} className="text-white hover:rotate-90 transition"><X className="w-5 h-5"/></button>
+        </div>
+        <form onSubmit={handleCreateCompany} className="p-6 space-y-4">
+          <div>
+            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Nombre de la Empresa</label>
+            <input required type="text" placeholder="Ej: Mi Empresa S.A.C."
+              className="w-full border-2 border-gray-200 p-3 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600"
+              value={companyForm.name} onChange={e => setCompanyForm(p => ({ ...p, name: e.target.value }))} />
+          </div>
+          <div>
+            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">RUC</label>
+            <input type="text" maxLength={11} placeholder="20123456789 (opcional)"
+              className="w-full border-2 border-gray-200 p-3 rounded-xl text-sm font-mono font-bold text-gray-900 outline-none focus:border-brand-600"
+              value={companyForm.ruc} onChange={e => setCompanyForm(p => ({ ...p, ruc: e.target.value }))} />
+          </div>
+          <div>
+            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Razón Social</label>
+            <input type="text" placeholder="EMPRESA S.A.C."
+              className="w-full border-2 border-gray-200 p-3 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600 uppercase"
+              value={companyForm.businessName} onChange={e => setCompanyForm(p => ({ ...p, businessName: e.target.value }))} />
+          </div>
+          <div>
+            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Dirección Fiscal</label>
+            <input type="text" placeholder="Av. Principal 123"
+              className="w-full border-2 border-gray-200 p-3 rounded-xl text-sm font-bold text-gray-900 outline-none focus:border-brand-600 uppercase"
+              value={companyForm.taxAddress} onChange={e => setCompanyForm(p => ({ ...p, taxAddress: e.target.value }))} />
+          </div>
+          <button type="submit"
+            className="w-full py-3 bg-brand-600 text-white rounded-xl font-black uppercase text-xs tracking-widest hover:bg-brand-700 transition shadow-sm flex items-center justify-center gap-2">
+            <Building className="w-4 h-4" /> Crear Empresa
+          </button>
+        </form>
+      </div>
+    </div>
   )}
 
   {/* MODAL CREAR CONTADOR */}

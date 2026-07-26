@@ -36,7 +36,7 @@ const saveCorrelative = (userId: string, serie: string, corr: number) => {
 
 const padCorrelative = (n: number): string => String(n).padStart(8, '0');
 
-const getDefaultData = (user?: any): WizardData => ({
+const getDefaultData = (company?: any): WizardData => ({
   customerDocType: 'RUC',
   customerDocNumber: '',
   customerName: '',
@@ -44,7 +44,7 @@ const getDefaultData = (user?: any): WizardData => ({
   customerEmail: '',
   documentType: 'factura',
   sendToSunat: true,
-  serie: user?.serieFactura || 'F001',
+  serie: company?.serieFactura || 'F001',
   correlative: 1,
   issueDate: new Date().toISOString().split('T')[0],
   currency: 'PEN',
@@ -73,13 +73,13 @@ interface Props {
 export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) => {
   if (isOpen !== undefined && !isOpen) return null;
 
-  const { currentUser, sunatGlobalConfig, userProducts, addUserProduct, addPendingInvoice, removeUserProduct } = useStore();
+  const { currentUser, selectedCompany, selectedCompanyId, sunatGlobalConfig, userProducts, addUserProduct, addPendingInvoice, removeUserProduct } = useStore();
   const [step, setStep] = useState(0);
   const [data, setData] = useState<WizardData>(() => {
-    const userId = currentUser?.id;
-    const defaults = getDefaultData(currentUser);
+    const companyId = selectedCompanyId;
+    const defaults = getDefaultData(selectedCompany);
     const serie = defaults.serie;
-    const corr = userId ? getNextCorrelative(userId, serie) : 1;
+    const corr = companyId ? getNextCorrelative(companyId, serie) : 1;
     return { ...defaults, correlative: corr };
   });
   const [searching, setSearching] = useState(false);
@@ -128,7 +128,7 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
     const isDni = data.customerDocType === 'DNI';
     const total = data.items.reduce((s, i) => s + i.total, 0);
 
-    if (data.sendToSunat && (!currentUser?.solUser || !currentUser?.solPass)) {
+    if (data.sendToSunat && (!selectedCompany?.solUser || !selectedCompany?.solPass)) {
       setError('Credenciales SOL no configuradas. Ve a Configuración SUNAT.'); setEmitting(false); return;
     }
 
@@ -139,7 +139,7 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
         customerRuc: data.customerDocNumber,
         customerName: data.customerName,
         customerType: isDni ? '1' : '6',
-        emitterName: currentUser?.businessName || 'MI EMPRESA S.A.C.',
+        emitterName: selectedCompany?.businessName || 'MI EMPRESA S.A.C.',
         items: data.items.map(i => ({
           description: i.description,
           quantity: i.quantity,
@@ -151,18 +151,19 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
         hasEstablishment: true
       },
       credentials: {
-        ruc: currentUser?.ruc,
-        user: currentUser?.solUser,
-        pass: currentUser?.solPass,
-        certBase64: currentUser?.certBase64,
-        certPass: currentUser?.certPass,
-        env: 'PRODUCTION'
+        ruc: selectedCompany?.ruc,
+        user: selectedCompany?.solUser,
+        pass: selectedCompany?.solPass,
+        certBase64: selectedCompany?.certBase64,
+        certPass: selectedCompany?.certPass,
+        env: selectedCompany?.sunatEnv || 'PRODUCTION'
       }
     };
 
     const buildPendingInvoice = (errorMsg: string) => ({
       id: `${data.serie}-${typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001'}`,
       userId: currentUser?.id || 'unknown',
+      companyId: selectedCompanyId || '',
       serie: data.serie,
       correlative: typeof data.correlative === 'number' ? data.correlative : 0,
       documentType: data.documentType,
@@ -181,8 +182,8 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
     try {
       if (!data.sendToSunat) {
         // === FLUJO INTERNO (sin envío a SUNAT) ===
-        if (currentUser?.id && typeof data.correlative === 'number') {
-          saveCorrelative(currentUser.id, data.serie, data.correlative);
+        if (selectedCompanyId && typeof data.correlative === 'number') {
+          saveCorrelative(selectedCompanyId, data.serie, data.correlative);
         }
         setSuccess(true);
         setCdrInfo({ code: '---', description: 'Interno - No enviado a SUNAT' });
@@ -207,10 +208,10 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
       const result = await response.json();
       if (result.success) {
         // Guardar correlativo usado
-        if (currentUser?.id && typeof data.correlative === 'number') {
-          saveCorrelative(currentUser.id, data.serie, data.correlative);
+        if (selectedCompanyId && typeof data.correlative === 'number') {
+          saveCorrelative(selectedCompanyId, data.serie, data.correlative);
           // Pre-cargar siguiente correlativo para el próximo wizard
-          localStorage.setItem(`ff_corr_next_${currentUser.id}_${data.serie}`, String(data.correlative + 1));
+          localStorage.setItem(`ff_corr_next_${selectedCompanyId}_${data.serie}`, String(data.correlative + 1));
         }
         setSuccess(true);
         setSunatResponse(result.sunatResponse || '');
@@ -235,11 +236,11 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              ruc: currentUser?.ruc,
+              ruc: selectedCompany?.ruc,
               tipo: tipoDoc,
               serie: data.serie,
               numero: correlativoNum,
-              credentials: { ruc: currentUser?.ruc, user: currentUser?.solUser, pass: currentUser?.solPass, env: 'PRODUCTION' }
+              credentials: { ruc: selectedCompany?.ruc, user: selectedCompany?.solUser, pass: selectedCompany?.solPass, env: selectedCompany?.sunatEnv || 'PRODUCTION' }
             })
           });
           const cpeResult = await cpeResp.json();
@@ -314,9 +315,9 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
     if (activeSuggestion.idx < 0 || !activeSuggestion.filter) return [];
     const filter = activeSuggestion.filter.toLowerCase();
     return (userProducts || []).filter(p =>
-      p.userId === currentUser?.id && p.description.toLowerCase().includes(filter)
+      p.userId === currentUser?.id && (!selectedCompanyId || p.companyId === selectedCompanyId) && p.description.toLowerCase().includes(filter)
     ).slice(0, 6);
-  }, [activeSuggestion, userProducts, currentUser?.id]);
+  }, [activeSuggestion, userProducts, currentUser?.id, selectedCompanyId]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -440,9 +441,9 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
                   <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider">Datos del Comprobante</h4>
                   <div className="flex gap-2">
                     {(['factura', 'boleta'] as const).map(t => {
-                      const serie = t === 'factura' ? (currentUser?.serieFactura || 'F001') : (currentUser?.serieBoleta || 'B001');
+                      const serie = t === 'factura' ? (selectedCompany?.serieFactura || 'F001') : (selectedCompany?.serieBoleta || 'B001');
                       const handleClick = () => {
-                        const next = currentUser?.id ? getNextCorrelative(currentUser.id, serie) : 1;
+                        const next = selectedCompanyId ? getNextCorrelative(selectedCompanyId, serie) : 1;
                         update({ documentType: t, serie, correlative: next });
                       };
                       return (
@@ -475,7 +476,7 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
                         }`}
                         value={data.serie} onChange={e => {
                           const newSerie = e.target.value.toUpperCase();
-                          const next = currentUser?.id ? getNextCorrelative(currentUser.id, newSerie) : 1;
+                          const next = selectedCompanyId ? getNextCorrelative(selectedCompanyId, newSerie) : 1;
                           update({ serie: newSerie, correlative: next });
                         }} />
                       {(data.documentType === 'factura' && !data.serie.startsWith('F')) &&

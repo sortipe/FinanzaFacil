@@ -1,11 +1,15 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User, Expense, SubscriptionPackage, PaymentMethod, UserRole, SubscriptionStatus, SubscriptionRecord, AdminNotification, TaxDocument, Complaint, UserProduct, PendingInvoice } from '../types';
+import { User, Expense, SubscriptionPackage, PaymentMethod, UserRole, SubscriptionStatus, SubscriptionRecord, AdminNotification, TaxDocument, Complaint, UserProduct, PendingInvoice, Company } from '../types';
 import * as api from '../src/services/api';
 
 interface StoreContextType {
   currentUser: User | null;
+  currentSubUser: User | null;
+  isSubUser: boolean;
   users: User[];
+  companies: Company[];
+  selectedCompanyId: string | null;
   expenses: Expense[];
   taxDocuments: TaxDocument[];
   packages: SubscriptionPackage[];
@@ -27,16 +31,18 @@ interface StoreContextType {
   addExpense: (expense: Expense) => void;
   addTaxDocument: (doc: TaxDocument) => void;
   deleteTaxDocument: (id: string) => void;
-  addUserProduct: (product: Omit<UserProduct, 'id' | 'userId' | 'lastUsed'>) => void;
+  addUserProduct: (product: Omit<UserProduct, 'id' | 'userId' | 'companyId' | 'lastUsed'>) => void;
   removeUserProduct: (id: string) => void;
   addPendingInvoice: (invoice: PendingInvoice) => void;
   removePendingInvoice: (id: string) => void;
   updatePendingInvoiceStatus: (id: string, status: PendingInvoice['status'], lastError?: string) => void;
 
   deleteUser: (userId: string) => void;
+  addSubUser: (subUser: User) => Promise<void>;
+  deleteSubUser: (userId: string) => void;
   updatePaymentMethod: (id: string, details: Partial<PaymentMethod>) => void;
   updatePackage: (id: string, details: Partial<SubscriptionPackage>) => void;
-  assignAccountant: (userId: string, accountantId: string) => void;
+  assignAccountant: (companyId: string, accountantId: string) => void;
   addSubscriptionRecord: (record: SubscriptionRecord) => void;
   updateSubscriptionRecord: (id: string, details: Partial<SubscriptionRecord>) => void;
   addComplaint: (complaint: Complaint) => void;
@@ -46,6 +52,13 @@ interface StoreContextType {
   markNotificationAsRead: (id: string) => void;
   sunatGlobalConfig: { sunatToken: string; sunatApiUrl: string };
   updateSunatGlobalConfig: (config: { sunatToken?: string; sunatApiUrl?: string }) => void;
+
+  addCompany: (company: Company) => void;
+  updateCompany: (id: string, data: Partial<Company>) => void;
+  deleteCompany: (id: string) => void;
+  selectCompany: (id: string | null) => void;
+  selectedCompany: Company | null;
+
   refreshData: () => Promise<void>;
 }
 
@@ -53,7 +66,7 @@ const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
 const DEMO_QR = "iVBORw0KGgoAAAANSUhEUgAAAMgAAADIEAIAAACv9n9iAAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwwAADsMBx2+oZAAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIHYzLjUuMTAw9H66AAADeUlEQVR42u3c0XLjMAwEUP//6S0zdR0nImFIIAnuOedpmsZAsYtEiqvX63UBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAL7T398f/+X1en19ffG7wY093uR0V9pX8W/y7X839njP70N3pX0V98V0T/90Y8897z50V9pXcR/M9390Y8877z50V9pXcR/U9z90Y8+Xn/89777Xvop7ofv6f6fV76O/ybe73vX6P6eXfB90X/961+v/nF7yfdB9/etdr/9zesn3Qff1r3e9/s/pJR8AAMD3uV6vz7+n9/Y7CIsVvN75rXn++W683vktfP75Lrz++S283vktvP7vIywAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOD/5S8AAP//AwCHfK5Lz8Y/LAAAAABJRU5ErkJggg==";
 
-const LS_KEYS = ['ff_users','ff_current_user','ff_expenses','ff_tax_docs','ff_packages','ff_payment_methods','ff_subscription_history','ff_complaints','ff_sunat_global','ff_user_products','ff_pending_invoices'];
+const LS_KEYS = ['ff_users','ff_current_user','ff_expenses','ff_tax_docs','ff_packages','ff_payment_methods','ff_subscription_history','ff_complaints','ff_sunat_global','ff_user_products','ff_pending_invoices','ff_companies','ff_selected_company_id'];
 
 const loadFromLS = (key: string, fallback: any) => {
   try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : fallback; } catch { return fallback; }
@@ -73,14 +86,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [sunatGlobalConfig, setSunatGlobalConfig] = useState(() => loadFromLS('ff_sunat_global', { sunatToken: '', sunatApiUrl: '' }));
   const [userProducts, setUserProducts] = useState<UserProduct[]>(() => loadFromLS('ff_user_products', []));
   const [pendingInvoices, setPendingInvoices] = useState<PendingInvoice[]>([]);
+  const [companies, setCompanies] = useState<Company[]>(() => loadFromLS('ff_companies', []));
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(() => loadFromLS('ff_selected_company_id', null));
+  const [currentSubUser, setCurrentSubUser] = useState<User | null>(() => loadFromLS('ff_current_sub_user', null));
+  const isSubUser = currentSubUser !== null && currentUser !== null && currentSubUser.id !== currentUser.id;
 
   // Fetch initial data from API with localStorage fallback
   useEffect(() => {
     let cancelled = false;
     const init = async () => {
       try {
-        const [u, e, td, pkg, pm, sh, cp, up, pi, sc, n] = await Promise.all([
+        const [u, comp, e, td, pkg, pm, sh, cp, up, pi, sc, n] = await Promise.all([
           api.fetchUsers().catch(() => loadFromLS('ff_users', [])),
+          api.fetchCompanies().catch(() => loadFromLS('ff_companies', [])),
           api.fetchExpenses().catch(() => loadFromLS('ff_expenses', [])),
           api.fetchTaxDocuments().catch(() => loadFromLS('ff_tax_docs', [])),
           api.fetchPackages().catch(() => loadFromLS('ff_packages', [])),
@@ -94,6 +112,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         ]);
         if (cancelled) return;
         setUsers(u);
+        setCompanies(comp);
         setCurrentUser(prev => {
           if (!prev) return null;
           const fresh = u.find((usr: User) => usr.id === prev.id);
@@ -133,19 +152,35 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { localStorage.setItem('ff_sunat_global', JSON.stringify(sunatGlobalConfig)); }, [sunatGlobalConfig]);
   useEffect(() => { localStorage.setItem('ff_user_products', JSON.stringify(userProducts)); }, [userProducts]);
   useEffect(() => { localStorage.setItem('ff_pending_invoices', JSON.stringify(pendingInvoices)); }, [pendingInvoices]);
+  useEffect(() => { localStorage.setItem('ff_companies', JSON.stringify(companies)); }, [companies]);
+  useEffect(() => { localStorage.setItem('ff_selected_company_id', JSON.stringify(selectedCompanyId)); }, [selectedCompanyId]);
 
   const login = (email: string, password: string): boolean => {
     const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
     if (!user) { alert("Credenciales incorrectas."); return false; }
     if (user.password && user.password !== password) { alert("Credenciales incorrectas."); return false; }
-    setCurrentUser(user);
-    localStorage.setItem('ff_current_user', JSON.stringify(user));
+    
+    if (user.role === UserRole.SUB_USER && user.parentId) {
+      const parent = users.find(u => u.id === user.parentId);
+      if (!parent) { alert("Cuenta principal no encontrada."); return false; }
+      setCurrentUser(parent);
+      setCurrentSubUser(user);
+      localStorage.setItem('ff_current_user', JSON.stringify(parent));
+      localStorage.setItem('ff_current_sub_user', JSON.stringify(user));
+    } else {
+      setCurrentUser(user);
+      setCurrentSubUser(null);
+      localStorage.setItem('ff_current_user', JSON.stringify(user));
+      localStorage.removeItem('ff_current_sub_user');
+    }
     return true;
   };
 
   const logout = () => {
     setCurrentUser(null);
+    setCurrentSubUser(null);
     localStorage.removeItem('ff_current_user');
+    localStorage.removeItem('ff_current_sub_user');
   };
 
   const registerUser = async (user: User) => {
@@ -206,6 +241,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setUsers(prev => prev.filter(u => u.id !== userId));
   };
 
+  const addSubUser = async (subUser: User) => {
+    try {
+      await api.createUser(subUser);
+    } catch (e: any) {
+      console.error('Error al crear sub-usuario:', e);
+      throw e;
+    }
+    setUsers(prev => [...prev, subUser]);
+  };
+
+  const deleteSubUser = (userId: string) => {
+    api.deleteUser(userId).catch(() => {});
+    setUsers(prev => prev.filter(u => u.id !== userId));
+  };
+
   const updatePaymentMethod = (id: string, details: Partial<PaymentMethod>) => {
     api.updatePaymentMethod(id, details).catch(() => {});
     setPaymentMethods(prev => prev.map(pm => pm.id === id ? { ...pm, ...details } : pm));
@@ -219,7 +269,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPackages(prev => prev.map(p => p.id === id ? { ...p, ...details } : p));
   };
 
-  const assignAccountant = (userId: string, accountantId: string) => updateUser(userId, { assignedAccountantId: accountantId });
+  const assignAccountant = (companyId: string, accountantId: string) => {
+    api.updateCompany(companyId, { assignedAccountantId: accountantId }).catch(() => {});
+    setCompanies(prev => prev.map(c => c.id === companyId ? { ...c, assignedAccountantId: accountantId } : c));
+  };
 
   const addSubscriptionRecord = (record: SubscriptionRecord) => {
     api.createSubscriptionRecord(record).catch((err) => {
@@ -303,10 +356,33 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }));
   };
 
+  const addCompany = (company: Company) => {
+    api.createCompany(company).catch(() => {});
+    setCompanies(prev => [...prev, company]);
+  };
+
+  const updateCompany = (id: string, data: Partial<Company>) => {
+    api.updateCompany(id, data).catch(() => {});
+    setCompanies(prev => prev.map(c => c.id === id ? { ...c, ...data } : c));
+  };
+
+  const deleteCompany = (id: string) => {
+    api.deleteCompany(id).catch(() => {});
+    setCompanies(prev => prev.filter(c => c.id !== id));
+    if (selectedCompanyId === id) setSelectedCompanyId(null);
+  };
+
+  const selectCompany = (id: string | null) => {
+    setSelectedCompanyId(id);
+  };
+
+  const selectedCompany = companies.find(c => c.id === selectedCompanyId) || null;
+
   const refreshData = async () => {
     try {
-      const [u, e, td, pkg, pm, sh, cp, up, pi, sc, n] = await Promise.all([
+      const [u, comp, e, td, pkg, pm, sh, cp, up, pi, sc, n] = await Promise.all([
         api.fetchUsers().catch(() => users),
+        api.fetchCompanies().catch(() => companies),
         api.fetchExpenses().catch(() => expenses),
         api.fetchTaxDocuments().catch(() => taxDocuments),
         api.fetchPackages().catch(() => packages),
@@ -319,6 +395,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         api.fetchNotifications().catch(() => notifications),
       ]);
       setUsers(u);
+      setCompanies(comp);
       setExpenses(e);
       setTaxDocuments(td);
       setPackages(pkg);
@@ -336,11 +413,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   return (
     <StoreContext.Provider value={{
-      currentUser, users, expenses, taxDocuments, packages, paymentMethods, subscriptionHistory, notifications, complaints, sunatGlobalConfig, userProducts, pendingInvoices, loading,
+      currentUser, currentSubUser, isSubUser, users, companies, selectedCompanyId, selectedCompany, expenses, taxDocuments, packages, paymentMethods, subscriptionHistory, notifications, complaints, sunatGlobalConfig, userProducts, pendingInvoices, loading,
       login, logout, registerUser, updateUser, updateUserStatus, addExpense, addTaxDocument, deleteTaxDocument, changePassword, generatePassword,
-      deleteUser, updatePaymentMethod, updatePackage, assignAccountant, addSubscriptionRecord, updateSubscriptionRecord,
+      deleteUser, addSubUser, deleteSubUser, updatePaymentMethod, updatePackage, assignAccountant, addSubscriptionRecord, updateSubscriptionRecord,
       addNotification, markNotificationAsRead, addComplaint, updateComplaintStatus, updateSunatGlobalConfig, addUserProduct, removeUserProduct,
-      addPendingInvoice, removePendingInvoice, updatePendingInvoiceStatus, refreshData
+      addPendingInvoice, removePendingInvoice, updatePendingInvoiceStatus,
+      addCompany, updateCompany, deleteCompany, selectCompany,
+      refreshData
     }}>
       {children}
     </StoreContext.Provider>

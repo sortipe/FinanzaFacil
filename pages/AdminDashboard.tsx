@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
-import { UserRole, SubscriptionStatus, User, SubscriptionRecord } from '../types';
+import { UserRole, SubscriptionStatus, User, SubscriptionRecord, Company } from '../types';
 // Fixed: Aliased User as UserIcon from lucide-react to avoid name collision with User type
 import { User as UserIcon, Users, Trash2, Edit2, Shield, CreditCard, Save, History, X, PlusCircle, UserPlus, Check, Bell, Info, QrCode, Upload, Building, MapPin, Hash, Settings, Package, DollarSign, Smartphone, Globe, ExternalLink, Book, CheckCircle2, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { fileToBase64 } from '../services/geminiService';
@@ -8,9 +8,13 @@ import { fileToBase64 } from '../services/geminiService';
 export const AdminDashboard: React.FC = () => {
   const { 
     users, 
+    companies,
     registerUser, 
     updateUser, 
     deleteUser, 
+    addCompany,
+    updateCompany,
+    deleteCompany,
     packages, 
     updatePackage, 
     paymentMethods, 
@@ -37,7 +41,7 @@ export const AdminDashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'users' | 'subscriptions' | 'settings' | 'complaints'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'subscriptions' | 'settings' | 'complaints' | 'companies'>('users');
   const [subFilter, setSubFilter] = useState<'all' | SubscriptionStatus>('all');
   const [showNotifications, setShowNotifications] = useState(false);
   const [previewVoucherRec, setPreviewVoucherRec] = useState<SubscriptionRecord | null>(null);
@@ -74,13 +78,67 @@ export const AdminDashboard: React.FC = () => {
     email: '',
     role: UserRole.USER,
     subscriptionStatus: SubscriptionStatus.PENDING,
-    assignedAccountantId: '',
-    ruc: '',
-    taxAddress: '',
-    solUser: '',
-    solPass: ''
   });
   const [generatedPassword, setGeneratedPassword] = useState('');
+
+  // --- COMPANY MANAGEMENT STATES ---
+  const [showCompanyModal, setShowCompanyModal] = useState(false);
+  const [editingCompany, setEditingCompany] = useState<Company | null>(null);
+  const [companyFormData, setCompanyFormData] = useState({
+    name: '',
+    ruc: '',
+    businessName: '',
+    taxAddress: '',
+    ownerUserId: '',
+    assignedAccountantId: '',
+    solUser: '',
+    solPass: '',
+    serieFactura: 'F001',
+    serieBoleta: 'B001',
+    sunatEnv: 'SANDBOX' as 'SANDBOX' | 'PRODUCTION',
+  });
+
+  const handleOpenCreateCompany = () => {
+    setEditingCompany(null);
+    setCompanyFormData({
+      name: '', ruc: '', businessName: '', taxAddress: '',
+      ownerUserId: '', assignedAccountantId: '',
+      solUser: '', solPass: '', serieFactura: 'F001', serieBoleta: 'B001', sunatEnv: 'SANDBOX',
+    });
+    setShowCompanyModal(true);
+  };
+
+  const handleOpenEditCompany = (company: Company) => {
+    setEditingCompany(company);
+    setCompanyFormData({
+      name: company.name, ruc: company.ruc || '', businessName: company.businessName || '',
+      taxAddress: company.taxAddress || '', ownerUserId: company.ownerUserId,
+      assignedAccountantId: company.assignedAccountantId || '',
+      solUser: company.solUser || '', solPass: company.solPass || '',
+      serieFactura: company.serieFactura || 'F001', serieBoleta: company.serieBoleta || 'B001',
+      sunatEnv: company.sunatEnv || 'SANDBOX',
+    });
+    setShowCompanyModal(true);
+  };
+
+  const handleSaveCompany = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (editingCompany) {
+        updateCompany(editingCompany.id, companyFormData);
+      } else {
+        const newCompany: Company = {
+          id: `comp-${Date.now()}`,
+          ...companyFormData,
+          createdAt: new Date().toISOString(),
+        };
+        addCompany(newCompany);
+      }
+      setShowCompanyModal(false);
+    } catch (err: any) {
+      alert("Error al guardar empresa: " + (err.message || "Error desconocido"));
+    }
+  };
 
   const handleEditPackage = (pkg: any) => {
     setEditingPackageId(pkg.id);
@@ -145,8 +203,6 @@ export const AdminDashboard: React.FC = () => {
     setGeneratedPassword(pwd);
     setUserFormData({
       name: '', email: '', role: UserRole.USER, subscriptionStatus: SubscriptionStatus.PENDING,
-      assignedAccountantId: '', ruc: '', dni: '', businessName: '', taxAddress: '',
-      solUser: '', solPass: ''
     });
     setShowUserModal(true);
   };
@@ -157,11 +213,6 @@ export const AdminDashboard: React.FC = () => {
     setUserFormData({
       name: user.name, email: user.email, role: user.role,
       subscriptionStatus: user.subscriptionStatus || SubscriptionStatus.PENDING,
-      assignedAccountantId: user.assignedAccountantId || '',
-      ruc: user.ruc || '', dni: user.dni || '', businessName: user.businessName || '',
-      taxAddress: user.taxAddress || '',
-      solUser: user.solUser || '',
-      solPass: user.solPass || ''
     });
     setShowUserModal(true);
   };
@@ -247,8 +298,14 @@ export const AdminDashboard: React.FC = () => {
                    )) : <p className="p-8 text-center text-xs text-gray-400 italic">Todo al día</p>}
                 </div>
               </div>
-            )}
-          </div>
+                   )}
+                   {!editingUser && (
+                     <div className="sm:col-span-2">
+                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Contraseña Generada</label>
+                       <input type="password" readOnly value={generatedPassword} className="w-full border-2 border-gray-200 p-3.5 rounded-2xl text-sm font-mono text-gray-500 bg-gray-50 cursor-not-allowed outline-none" placeholder="Se generará automáticamente" />
+                     </div>
+                   )}
+               </div>
         </div>
       </header>
 
@@ -270,6 +327,9 @@ export const AdminDashboard: React.FC = () => {
         </button>
         <button onClick={() => setActiveTab('complaints')} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center ${activeTab === 'complaints' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-600'}`}>
           <Book className="w-4 h-4 mr-2" /> Reclamos
+        </button>
+        <button onClick={() => setActiveTab('companies')} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center ${activeTab === 'companies' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-600'}`}>
+          <Building className="w-4 h-4 mr-2" /> Empresas
         </button>
       </div>
 
@@ -341,7 +401,10 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="px-6 py-4">
                           <span className="text-[10px] font-bold text-gray-600">
-                            {user.role === UserRole.USER ? getAccountantName(user.assignedAccountantId) : '—'}
+                            {user.role === UserRole.USER ? (() => {
+                              const userCompany = companies.find(c => c.ownerUserId === user.id);
+                              return userCompany ? getAccountantName(userCompany.assignedAccountantId) : '—';
+                            })() : '—'}
                           </span>
                         </td>
                         <td className="px-6 py-4">
@@ -752,6 +815,84 @@ export const AdminDashboard: React.FC = () => {
                </div>
             </div>
          </div>
+      ) : activeTab === 'companies' ? (
+        <div className="space-y-6 animate-fade-in-up">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <h3 className="text-sm font-black uppercase tracking-widest text-gray-800">Gestión de Empresas</h3>
+              <p className="text-[10px] text-gray-400 font-bold uppercase">Administra las empresas y su configuración SUNAT</p>
+            </div>
+            <button onClick={handleOpenCreateCompany} className="bg-brand-600 text-white px-6 py-3 rounded-2xl hover:bg-brand-700 transition flex items-center font-black text-xs uppercase tracking-widest shadow-xl active:scale-95">
+              <PlusCircle className="w-4 h-4 mr-2" /> Nueva Empresa
+            </button>
+          </div>
+
+          <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-gray-50 border-b">
+                  <tr>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Empresa</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">RUC</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Propietario</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Contador</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">SOL</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Entorno</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest text-right">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {companies.length === 0 ? (
+                    <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-xs font-bold italic">No hay empresas registradas.</td></tr>
+                  ) : companies.map(company => {
+                    const owner = users.find(u => u.id === company.ownerUserId);
+                    const accountant = accountants.find(a => a.id === company.assignedAccountantId);
+                    return (
+                      <tr key={company.id} className="hover:bg-gray-50 transition">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 rounded-xl bg-brand-100 flex items-center justify-center">
+                              <Building className="w-5 h-5 text-brand-600" />
+                            </div>
+                            <div>
+                              <p className="font-black text-gray-900 text-sm uppercase tracking-tighter leading-none mb-1">{company.name}</p>
+                              {company.businessName && <p className="text-[10px] text-gray-400 font-bold">{company.businessName}</p>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-xs font-mono font-bold text-gray-600">{company.ruc || '—'}</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-[10px] font-bold text-gray-600">{owner?.name || '—'}</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-[10px] font-bold text-gray-600">{accountant?.name || '—'}</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full ${company.solUser ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}`}>
+                            {company.solUser ? 'Configurado' : 'Pendiente'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full ${company.sunatEnv === 'PRODUCTION' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                            {company.sunatEnv || 'SANDBOX'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end space-x-2">
+                            <button onClick={() => handleOpenEditCompany(company)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"><Edit2 className="w-4 h-4" /></button>
+                            <button onClick={() => { if(confirm('¿Eliminar esta empresa? Se perderán las configuraciones SUNAT asociadas.')) deleteCompany(company.id) }} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
        ) : (
         /* CONFIGURACIÓN DE PAGOS Y PLANES - FONDOS CLAROS Y TEXTO NEGRO */
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fade-in-up">
@@ -941,39 +1082,6 @@ export const AdminDashboard: React.FC = () => {
                   )}
                </div>
 
-                {userFormData.role === UserRole.USER && (
-                  <div className="pt-6 border-t space-y-6">
-                    <h4 className="text-[10px] font-black text-brand-600 uppercase tracking-widest flex items-center">
-                      <Shield className="w-4 h-4 mr-2"/> Credenciales SUNAT
-                    </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                      <div>
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Usuario SOL</label>
-                        <input type="text" placeholder="MODDATOS" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-bold text-gray-900 bg-white focus:border-brand-500 outline-none uppercase" value={userFormData.solUser} onChange={e => setUserFormData({...userFormData, solUser: e.target.value})} />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Clave SOL</label>
-                        <input type="password" placeholder="********" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={userFormData.solPass} onChange={e => setUserFormData({...userFormData, solPass: e.target.value})} />
-                      </div>
-                      {!editingUser && (
-                        <div className="sm:col-span-2">
-                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Contraseña Generada</label>
-                          <input type="password" readOnly value={generatedPassword} className="w-full border-2 border-gray-200 p-3.5 rounded-2xl text-sm font-mono text-gray-500 bg-gray-50 cursor-not-allowed outline-none" placeholder="Se generará automáticamente" />
-                        </div>
-                      )}
-                      <div className="sm:col-span-2">
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Contador Asignado</label>
-                        <select className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-black text-gray-900 bg-white" value={userFormData.assignedAccountantId} onChange={e => setUserFormData({...userFormData, assignedAccountantId: e.target.value})}>
-                          <option value="">Sin contador</option>
-                          {accountants.map(acc => (
-                            <option key={acc.id} value={acc.id}>{acc.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                <div className="pt-6 border-t flex space-x-3">
                   <button type="button" onClick={() => setShowUserModal(false)} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-black uppercase text-xs">Cancelar</button>
                   <button type="submit" className="flex-1 py-4 bg-brand-600 text-white rounded-2xl font-black uppercase text-xs shadow-xl shadow-brand-100">Guardar Cambios</button>
@@ -1116,6 +1224,89 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+      {/* MODAL EMPRESA */}
+      {showCompanyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-fade-in-up flex flex-col max-h-[90vh]">
+            <div className="p-6 bg-gray-50 border-b flex justify-between items-center">
+              <h3 className="text-lg font-black uppercase tracking-tight text-gray-800">{editingCompany ? 'Editar Empresa' : 'Nueva Empresa'}</h3>
+              <button onClick={() => setShowCompanyModal(false)}><X className="w-6 h-6 text-gray-400"/></button>
+            </div>
+            <form onSubmit={handleSaveCompany} className="p-8 space-y-6 overflow-y-auto bg-white text-gray-900">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="sm:col-span-2">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Nombre de la Empresa</label>
+                  <input type="text" required className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.name} onChange={e => setCompanyFormData({...companyFormData, name: e.target.value})} />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">RUC</label>
+                  <input type="text" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.ruc} onChange={e => setCompanyFormData({...companyFormData, ruc: e.target.value})} maxLength={11} placeholder="20123456789" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">DNI</label>
+                  <input type="text" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.dni || ''} onChange={e => setCompanyFormData({...companyFormData, dni: e.target.value})} maxLength={8} placeholder="12345678" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Razón Social</label>
+                  <input type="text" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-bold text-gray-900 bg-white focus:border-brand-500 outline-none uppercase" value={companyFormData.businessName} onChange={e => setCompanyFormData({...companyFormData, businessName: e.target.value})} placeholder="EMPRESA S.A.C." />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Dirección Fiscal</label>
+                  <input type="text" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-bold text-gray-900 bg-white focus:border-brand-500 outline-none uppercase" value={companyFormData.taxAddress} onChange={e => setCompanyFormData({...companyFormData, taxAddress: e.target.value})} placeholder="Av. Principal 123" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Propietario (Usuario)</label>
+                  <select className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-black text-gray-900 bg-white" value={companyFormData.ownerUserId} onChange={e => setCompanyFormData({...companyFormData, ownerUserId: e.target.value})} required>
+                    <option value="">Seleccionar usuario</option>
+                    {users.filter(u => u.role === UserRole.USER).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Contador Asignado</label>
+                  <select className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-black text-gray-900 bg-white" value={companyFormData.assignedAccountantId} onChange={e => setCompanyFormData({...companyFormData, assignedAccountantId: e.target.value})}>
+                    <option value="">Sin contador</option>
+                    {accountants.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-gray-100">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Configuración SOL / SUNAT</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Usuario SOL</label>
+                    <input type="text" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.solUser} onChange={e => setCompanyFormData({...companyFormData, solUser: e.target.value})} placeholder="AAAFFF11111" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Clave SOL</label>
+                    <input type="password" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.solPass} onChange={e => setCompanyFormData({...companyFormData, solPass: e.target.value})} placeholder="*****" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Serie Factura</label>
+                    <input type="text" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.serieFactura} onChange={e => setCompanyFormData({...companyFormData, serieFactura: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Serie Boleta</label>
+                    <input type="text" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.serieBoleta} onChange={e => setCompanyFormData({...companyFormData, serieBoleta: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Entorno SUNAT</label>
+                    <select className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-black text-gray-900 bg-white" value={companyFormData.sunatEnv} onChange={e => setCompanyFormData({...companyFormData, sunatEnv: e.target.value as 'SANDBOX' | 'PRODUCTION'})}>
+                      <option value="SANDBOX">Pruebas (Sandbox)</option>
+                      <option value="PRODUCTION">Producción</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-6 border-t flex space-x-3">
+                <button type="button" onClick={() => setShowCompanyModal(false)} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-black uppercase text-xs">Cancelar</button>
+                <button type="submit" className="flex-1 py-4 bg-brand-600 text-white rounded-2xl font-black uppercase text-xs shadow-xl shadow-brand-100">Guardar Empresa</button>
+              </div>
+            </form>
           </div>
         </div>
       )}

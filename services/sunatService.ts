@@ -14,7 +14,14 @@ export interface SunatResponse {
   error?: string;
   pdfUrl?: string;
   xmlUrl?: string;
+  cdrUrl?: string;
+  xmlContent?: string;
+  cdrBase64?: string;
   sunatStatus?: string;
+  amount?: number;
+  name?: string;
+  customerName?: string;
+  id?: string;
 }
 
 export const sunatService = {

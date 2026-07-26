@@ -12,6 +12,11 @@ async function request(url: string, options: RequestInit = {}) {
   return res.json();
 }
 
+const buildQuery = (params: Record<string, string | undefined>) => {
+  const entries = Object.entries(params).filter(([, v]) => v);
+  return entries.length ? '?' + new URLSearchParams(entries as [string, string][]).toString() : '';
+};
+
 // Users
 export const fetchUsers = (): Promise<any> => request('/users');
 export const fetchUser = (id: string): Promise<any> => request(`/users/${id}`);
@@ -19,13 +24,20 @@ export const createUser = (user: any): Promise<any> => request('/users', { metho
 export const updateUser = (id: string, data: any): Promise<any> => request(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteUser = (id: string): Promise<any> => request(`/users/${id}`, { method: 'DELETE' });
 
+// Companies
+export const fetchCompanies = (userId?: string): Promise<any> => request(`/companies${buildQuery({ userId })}`);
+export const fetchCompany = (id: string): Promise<any> => request(`/companies/${id}`);
+export const createCompany = (company: any): Promise<any> => request('/companies', { method: 'POST', body: JSON.stringify(company) });
+export const updateCompany = (id: string, data: any): Promise<any> => request(`/companies/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteCompany = (id: string): Promise<any> => request(`/companies/${id}`, { method: 'DELETE' });
+
 // Expenses
-export const fetchExpenses = (userId?: string): Promise<any> => request(`/expenses${userId ? `?userId=${userId}` : ''}`);
+export const fetchExpenses = (userId?: string, companyId?: string): Promise<any> => request(`/expenses${buildQuery({ userId, companyId })}`);
 export const createExpense = (expense: any): Promise<any> => request('/expenses', { method: 'POST', body: JSON.stringify(expense) });
 export const deleteExpense = (id: string): Promise<any> => request(`/expenses/${id}`, { method: 'DELETE' });
 
 // Tax Documents
-export const fetchTaxDocuments = (userId?: string): Promise<any> => request(`/tax-documents${userId ? `?userId=${userId}` : ''}`);
+export const fetchTaxDocuments = (userId?: string, companyId?: string): Promise<any> => request(`/tax-documents${buildQuery({ userId, companyId })}`);
 export const createTaxDocument = (doc: any): Promise<any> => request('/tax-documents', { method: 'POST', body: JSON.stringify(doc) });
 export const deleteTaxDocument = (id: string): Promise<any> => request(`/tax-documents/${id}`, { method: 'DELETE' });
 
@@ -41,23 +53,23 @@ export const createPaymentMethod = (pm: any): Promise<any> => request('/payment-
 export const updatePaymentMethod = (id: string, data: any): Promise<any> => request(`/payment-methods/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
 // Subscription History
-export const fetchSubscriptionHistory = (userId?: string): Promise<any> => request(`/subscription-history${userId ? `?userId=${userId}` : ''}`);
+export const fetchSubscriptionHistory = (userId?: string): Promise<any> => request(`/subscription-history${buildQuery({ userId })}`);
 export const createSubscriptionRecord = (record: any): Promise<any> => request('/subscription-history', { method: 'POST', body: JSON.stringify(record) });
 export const updateSubscriptionRecord = (id: string, record: any): Promise<any> => request(`/subscription-history/${id}`, { method: 'PUT', body: JSON.stringify(record) });
 
 // Complaints
-export const fetchComplaints = (): Promise<any> => request('/complaints');
+export const fetchComplaints = (companyId?: string): Promise<any> => request(`/complaints${buildQuery({ companyId })}`);
 export const createComplaint = (complaint: any): Promise<any> => request('/complaints', { method: 'POST', body: JSON.stringify(complaint) });
 export const updateComplaintStatus = (id: string, status: string): Promise<any> => request(`/complaints/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
 
 // User Products
-export const fetchUserProducts = (userId?: string): Promise<any> => request(`/user-products${userId ? `?userId=${userId}` : ''}`);
+export const fetchUserProducts = (userId?: string, companyId?: string): Promise<any> => request(`/user-products${buildQuery({ userId, companyId })}`);
 export const createUserProduct = (product: any): Promise<any> => request('/user-products', { method: 'POST', body: JSON.stringify(product) });
 export const updateUserProduct = (id: string, data: any): Promise<any> => request(`/user-products/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteUserProduct = (id: string): Promise<any> => request(`/user-products/${id}`, { method: 'DELETE' });
 
 // Pending Invoices
-export const fetchPendingInvoices = (userId?: string): Promise<any> => request(`/pending-invoices${userId ? `?userId=${userId}` : ''}`);
+export const fetchPendingInvoices = (userId?: string, companyId?: string): Promise<any> => request(`/pending-invoices${buildQuery({ userId, companyId })}`);
 export const createPendingInvoice = (invoice: any): Promise<any> => request('/pending-invoices', { method: 'POST', body: JSON.stringify(invoice) });
 export const updatePendingInvoice = (id: string, data: any): Promise<any> => request(`/pending-invoices/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deletePendingInvoice = (id: string): Promise<any> => request(`/pending-invoices/${id}`, { method: 'DELETE' });
