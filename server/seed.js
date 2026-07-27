@@ -9,8 +9,10 @@ const SEED_USERS = [
 ];
 
 const SEED_PACKAGES = [
-  { id: 'p1', name: 'Plan Mensual Emprendedor', price: 49.00, duration_months: 1, features: JSON.stringify(['Escaneo ilimitado AI', 'Asesoría Contable básica', 'Buzón tributario 24/7']) },
-  { id: 'p2', name: 'Plan Anual Pro', price: 490.00, duration_months: 12, features: JSON.stringify(['Todo lo del plan mensual', '2 meses de regalo', 'Soporte prioritario WhatsApp']) },
+  { id: 'p1', name: 'Plan Mensual Emprendedor', price: 49.00, duration_months: 1, features: JSON.stringify(['Escaneo ilimitado AI', 'Asesoría Contable básica', 'Buzón tributario 24/7']), type: 'CLIENT' },
+  { id: 'p2', name: 'Plan Anual Pro', price: 490.00, duration_months: 12, features: JSON.stringify(['Todo lo del plan mensual', '2 meses de regalo', 'Soporte prioritario WhatsApp']), type: 'CLIENT' },
+  { id: 'pa1', name: 'Plan Contador Mensual', price: 79.00, duration_months: 1, features: JSON.stringify(['Gestión ilimitada de clientes', 'Buzón tributario 24/7', 'Reportes automáticos']), type: 'ACCOUNTANT' },
+  { id: 'pa2', name: 'Plan Contador Anual', price: 790.00, duration_months: 12, features: JSON.stringify(['Todo lo del plan mensual', '2 meses de regalo', 'Soporte prioritario', 'Multi-empresa']), type: 'ACCOUNTANT' },
 ];
 
 const DEMO_QR = "iVBORw0KGgoAAAANSUhEUgAAAMgAAADIEAIAAACv9n9iAAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAAOwwAADsMBx2+oZAAAABh0RVh0U29mdHdhcmUAUGFpbnQuTkVUIHYzLjUuMTAw9H66AAADeUlEQVR42u3c0XLjMAwEUP//6S0zdR0nImFIIAnuOedpmsZAsYtEiqvX63UBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAL7T398f/+X1en19ffG7wY093uR0V9pX8W/y7X839njP70N3pX0V98V0T/90Y8897z50V9pXcR/M9390Y8877z50V9pXcR/U9z90Y8+Xn/89777Xvop7ofv6f6fV76O/ybe73vX6P6eXfB90X/961+v/nF7yfdB9/etdr/9zesn3Qff1r3e9/s/pJR8AAMD3uV6vz7+n9/Y7CIsVvN75rXn++W683vktfP75Lrz++S283vktvP7vIywAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOD/5S8AAP//AwCHfK5Lz8Y/LAAAAABJRU5ErkJggg==";
@@ -43,8 +45,8 @@ const seed = async () => {
   }
 
   for (const p of SEED_PACKAGES) {
-    await db.query('INSERT INTO packages (id, name, price, duration_months, features) VALUES (?,?,?,?,?)',
-      [p.id, p.name, p.price, p.duration_months, p.features]);
+    await db.query('INSERT INTO packages (id, name, price, duration_months, features, type) VALUES (?,?,?,?,?,?)',
+      [p.id, p.name, p.price, p.duration_months, p.features, p.type || 'CLIENT']);
   }
 
   for (const pm of SEED_PAYMENT_METHODS) {

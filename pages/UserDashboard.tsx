@@ -8,6 +8,7 @@ import { consultaService } from '../services/consultaService';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
 import { SunatSettings } from '../components/SunatSettings';
 import { InvoiceWizard } from '../components/InvoiceWizard';
+import NoteWizard from '../components/NoteWizard';
 import { Payment } from '../pages/Payment';
 
 export const UserDashboard: React.FC = () => {
@@ -18,7 +19,7 @@ export const UserDashboard: React.FC = () => {
 
   const [analyzing, setAnalyzing] = useState(false);
   const [aiError, setAiError] = useState('');
-  const [docFilter, setDocFilter] = useState<'all' | 'rh' | 'factura' | 'pdt' | 'contador'>('all');
+  const [docFilter, setDocFilter] = useState<'all' | 'rh' | 'factura' | 'nc' | 'nd' | 'pdt' | 'contador'>('all');
   const [previewDoc, setPreviewDoc] = useState<TaxDocument | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
   const [showPayment, setShowPayment] = useState(false);
@@ -37,7 +38,6 @@ export const UserDashboard: React.FC = () => {
   const [showCreateCompany, setShowCreateCompany] = useState(false);
   const [companyForm, setCompanyForm] = useState({ name: '', ruc: '', businessName: '', taxAddress: '' });
 
-  const myCompany = useMemo(() => companies.find(c => c.ownerUserId === currentUser?.id) || null, [companies, currentUser]);
   const accountants = useMemo(() => users.filter(u => u.role === UserRole.ACCOUNTANT), [users]);
 
   // --- SUB-USER MANAGEMENT ---
@@ -51,20 +51,28 @@ export const UserDashboard: React.FC = () => {
     setRetrying(inv.id);
     updatePendingInvoiceStatus(inv.id, 'ENVIANDO');
     try {
-      const response = await fetch('/emitir-factura', {
+      const isNCND = inv.documentType === 'nota_credito' || inv.documentType === 'nota_debito';
+      const endpoint = isNCND ? '/emitir-nota' : '/emitir-factura';
+      const body = isNCND ? {
+        noteType: inv.documentType,
+        noteData: inv.payload,
+        credentials: inv.payload.credentials
+      } : inv.payload;
+      const response = await fetch(endpoint, {
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(inv.payload)
+        body: JSON.stringify(body)
       });
       const result = await response.json();
       if (result.success) {
         updatePendingInvoiceStatus(inv.id, 'ACEPTADO');
         const paddedCorr = typeof inv.correlative === 'number' ? String(inv.correlative).padStart(8, '0') : '00000001';
+        const prefix = inv.documentType === 'nota_credito' ? 'NC' : inv.documentType === 'nota_debito' ? 'ND' : inv.documentType === 'factura' ? 'F' : 'B';
         addTaxDocument({
           id: inv.id,
           userId: inv.userId,
           companyId: inv.companyId || selectedCompanyId || '',
-          accountantId: '',
-          name: `${inv.documentType === 'factura' ? 'F' : 'B'}${inv.serie}-${paddedCorr}`,
+          accountId: '',
+          name: `${prefix}${inv.serie}-${paddedCorr}`,
           fileUrl: '',
           pdfUrl: '',
           xmlUrl: result.xmlContent ? URL.createObjectURL(new Blob([result.xmlContent], { type: 'text/xml' })) : '',
@@ -76,7 +84,9 @@ export const UserDashboard: React.FC = () => {
           periodMonth: new Date().toLocaleDateString('es-ES', { month: 'long' }),
           periodYear: new Date().getFullYear(),
           sunatStatus: 'SENT',
-          sunatHash: Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join('')
+          sunatHash: Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join(''),
+          documentType: isNCND ? inv.documentType : undefined,
+          originalDocumentId: inv.originalDocumentId
         });
         addExpense({
           id: `exp-${inv.id}-${Date.now()}`,
@@ -121,6 +131,24 @@ export const UserDashboard: React.FC = () => {
     setShowCreateCompany(false);
   };
 
+  const handleSearchCompanyRuc = async () => {
+    const ruc = companyForm.ruc.replace(/\D/g, '');
+    if (ruc.length !== 11) { alert('El RUC debe tener 11 dígitos'); return; }
+    setIsSearchingRuc(true);
+    try {
+      const res = await consultaService.consultarRUC(ruc);
+      if (res.success && res.razonSocial) {
+        setCompanyForm(p => ({ ...p, businessName: res.razonSocial || '', taxAddress: res.address || '' }));
+      } else {
+        alert(res.error || 'No se encontró el RUC');
+      }
+    } catch {
+      alert('Error al consultar RUC');
+    } finally {
+      setIsSearchingRuc(false);
+    }
+  };
+
   const handleCreateSubUser = async () => {
     if (!currentUser || !subUserForm.name.trim() || !subUserForm.email.trim()) return;
     const pwd = subUserPwd || generatePassword();
@@ -163,8 +191,8 @@ export const UserDashboard: React.FC = () => {
     };
     try {
       await registerUser(newUser);
-      if (myCompany) {
-        assignAccountant(myCompany.id, newUser.id);
+      if (selectedCompany) {
+        assignAccountant(selectedCompany.id, newUser.id);
       }
       fetch('/api/send-welcome-email', {
         method: 'POST',
@@ -220,6 +248,8 @@ export const UserDashboard: React.FC = () => {
   
   // Invoice Flow States
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [showNcModal, setShowNcModal] = useState(false);
+  const [showNdModal, setShowNdModal] = useState(false);
   const [invoiceStep, setInvoiceStep] = useState<'form' | 'preview' | 'sync'>('form');
   const [invoiceForm, setInvoiceForm] = useState({
     recipientRuc: '',
@@ -660,8 +690,10 @@ export const UserDashboard: React.FC = () => {
     if (docFilter === 'contador') return d.uploadedBy === 'ACCOUNTANT';
     if (docFilter === 'rh') return d.id.startsWith('RH-');
     if (docFilter === 'factura') return d.id.startsWith('FACTURA-') || d.id.startsWith('F') || d.id.startsWith('B');
-    // pdt: ni RH ni FACTURA ni F ni B
-    return !d.id.startsWith('RH-') && !d.id.startsWith('FACTURA-') && !d.id.startsWith('F') && !d.id.startsWith('B');
+    if (docFilter === 'nc') return d.documentType === 'nota_credito' || d.id.startsWith('NC-');
+    if (docFilter === 'nd') return d.documentType === 'nota_debito' || d.id.startsWith('ND-');
+    // pdt: none of the above
+    return !d.id.startsWith('RH-') && !d.id.startsWith('FACTURA-') && !d.id.startsWith('F') && !d.id.startsWith('B') && !d.id.startsWith('NC-') && !d.id.startsWith('ND-') && d.documentType !== 'nota_credito' && d.documentType !== 'nota_debito';
   });
 
   return (
@@ -720,6 +752,12 @@ export const UserDashboard: React.FC = () => {
                     <button onClick={() => setShowReceiptModal(true)} className="bg-blue-600 text-white px-4 py-2.5 rounded-xl hover:bg-blue-700 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
                       <ReceiptText className="w-3.5 h-3.5 mr-1.5" /> RECIBO RH
                     </button>
+                    <button onClick={() => setShowNcModal(true)} className="bg-green-600 text-white px-4 py-2.5 rounded-xl hover:bg-green-700 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
+                      <FileText className="w-3.5 h-3.5 mr-1.5" /> N. CRÉDITO
+                    </button>
+                    <button onClick={() => setShowNdModal(true)} className="bg-red-600 text-white px-4 py-2.5 rounded-xl hover:bg-red-700 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
+                      <FileText className="w-3.5 h-3.5 mr-1.5" /> N. DÉBITO
+                    </button>
                  </div>
               </div>
 
@@ -763,39 +801,41 @@ export const UserDashboard: React.FC = () => {
              <ArrowLeft className="w-4 h-4" /> Volver al Dashboard
            </button>
 
-           {myCompany && (
-             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 space-y-4">
-               <div className="flex items-center justify-between">
-                 <div className="flex items-center gap-3">
-                   <div className="p-3 bg-brand-50 rounded-2xl text-brand-600"><Building className="w-5 h-5"/></div>
-                   <div>
-                     <h3 className="font-black text-gray-900 text-sm uppercase tracking-tighter">{myCompany.name}</h3>
-                     <p className="text-[10px] text-gray-400 font-bold">RUC: {myCompany.ruc || 'No registrado'}</p>
-                   </div>
-                 </div>
-               </div>
-               <div className="pt-4 border-t border-gray-100">
-                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Contador Asignado</label>
-                 {accountants.length === 0 ? (
-                   <p className="text-xs text-gray-400 italic">No hay contadores disponibles. Puedes crear uno desde el botón "Crear Contador".</p>
-                 ) : (
-                   <div className="flex items-center gap-3">
-                     <select
-                       value={myCompany.assignedAccountantId || ''}
-                       onChange={e => assignAccountant(myCompany.id, e.target.value || '')}
-                       className="flex-1 bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-brand-600"
-                     >
-                       <option value="">Sin contador asignado</option>
-                       {accountants.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                     </select>
-                     <button onClick={() => setShowCreateAccountant(true)} className="p-3 bg-brand-50 text-brand-600 rounded-xl hover:bg-brand-100 transition" title="Crear nuevo contador">
-                       <UserPlus className="w-4 h-4" />
-                     </button>
-                   </div>
-                 )}
-               </div>
-             </div>
-           )}
+            {selectedCompany && (
+              <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-brand-50 rounded-2xl text-brand-600"><Building className="w-5 h-5"/></div>
+                    <div>
+                      <h3 className="font-black text-gray-900 text-sm uppercase tracking-tighter">{selectedCompany.name}</h3>
+                      <p className="text-[10px] text-gray-400 font-bold">RUC: {selectedCompany.ruc || 'No registrado'}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="pt-4 border-t border-gray-100">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Contador Asignado</label>
+                  {accountants.length === 0 ? (
+                    <p className="text-xs text-gray-400 italic">No hay contadores disponibles. Puedes crear uno desde el botón "Crear Contador".</p>
+                  ) : (
+                    <div className="flex items-center gap-3">
+                      <select
+                        value={selectedCompany.assignedAccountantId || ''}
+                        onChange={e => assignAccountant(selectedCompany.id, e.target.value || '')}
+                        className="flex-1 bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-brand-600"
+                      >
+                        <option value="">Sin contador asignado</option>
+                        {accountants.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                       {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE && (
+                        <button onClick={() => setShowCreateAccountant(true)} className="p-3 bg-brand-50 text-brand-600 rounded-xl hover:bg-brand-100 transition" title="Crear nuevo contador">
+                          <UserPlus className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
            {/* SUB-USUARIOS */}
            {!isSubUser && (
@@ -1039,8 +1079,7 @@ export const UserDashboard: React.FC = () => {
         {/* BOTÓN DE SOPORTE - WHATSAPP / CONTADOR */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col justify-between relative group">
           {(() => {
-            const activeUser = users.find(u => u.id === currentUser?.id) || currentUser;
-            const myAccountant = activeUser?.assignedAccountantId ? users.find(u => u.id === activeUser.assignedAccountantId && u.role === UserRole.ACCOUNTANT) : null;
+            const myAccountant = selectedCompany?.assignedAccountantId ? users.find(u => u.id === selectedCompany.assignedAccountantId && u.role === UserRole.ACCOUNTANT) : null;
             return myAccountant ? (
               <>
                 <div className="absolute top-4 right-4 text-green-500"><MessageCircleMore className="w-6 h-6"/></div>
@@ -1085,10 +1124,14 @@ export const UserDashboard: React.FC = () => {
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Crea uno ahora</p>
                   </div>
                 </div>
-                <button onClick={() => { setAccForm({ name: '', email: '', phone: '' }); setAccPwd(generatePassword()); setAccCreated(false); setShowCreateAccountant(true); }}
-                  className="mt-4 w-full py-2 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition flex items-center justify-center gap-2 shadow-sm">
-                  <Plus className="w-4 h-4" /> Crear Contador
-                </button>
+                {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE ? (
+                  <button onClick={() => { setAccForm({ name: '', email: '', phone: '' }); setAccPwd(generatePassword()); setAccCreated(false); setShowCreateAccountant(true); }}
+                    className="mt-4 w-full py-2 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition flex items-center justify-center gap-2 shadow-sm">
+                    <Plus className="w-4 h-4" /> Crear Contador
+                  </button>
+                ) : (
+                  <p className="mt-4 text-[9px] text-gray-400 font-bold uppercase text-center">Activa tu suscripción para crear contadores</p>
+                )}
               </>
             );
           })()}
@@ -1096,33 +1139,43 @@ export const UserDashboard: React.FC = () => {
       </div>
 
       {/* SUSCRIPCIÓN */}
-      {currentUser && (
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-brand-100 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="p-3 rounded-2xl bg-brand-50"><CalendarDays className="w-6 h-6 text-brand-600"/></div>
-            <div>
-              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Suscripción</p>
-              <p className="text-sm font-black text-gray-900">
-                {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE ? (
-                  <>Activa hasta el {currentUser.subscriptionEndDate ? new Date(currentUser.subscriptionEndDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</>
-                ) : currentUser.subscriptionStatus === SubscriptionStatus.EXPIRED ? (
-                  <span className="text-red-600">Vencida</span>
-                ) : (
-                  <span className="text-amber-600">Pendiente de pago</span>
-                )}
-              </p>
+      {currentUser && (() => {
+        const hasOwnSubscription = currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE;
+        const clientCompanies = companies.filter(c => c.ownerUserId === currentUser.id);
+        const accountantId = clientCompanies.find(c => c.assignedAccountantId)?.assignedAccountantId;
+        const accountant = accountantId ? users.find(u => u.id === accountantId) : null;
+        const hasInherited = !hasOwnSubscription && accountant?.subscriptionStatus === SubscriptionStatus.ACTIVE;
+
+        return (
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-brand-100 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-2xl bg-brand-50"><CalendarDays className="w-6 h-6 text-brand-600"/></div>
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Suscripción</p>
+                <p className="text-sm font-black text-gray-900">
+                  {hasOwnSubscription ? (
+                    <>Activa hasta el {currentUser.subscriptionEndDate ? new Date(currentUser.subscriptionEndDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</>
+                  ) : hasInherited ? (
+                    <><span className="text-blue-600">Activa</span> <span className="text-[10px] text-gray-400">(vía contador: {accountant?.name})</span></>
+                  ) : currentUser.subscriptionStatus === SubscriptionStatus.EXPIRED ? (
+                    <span className="text-red-600">Vencida</span>
+                  ) : (
+                    <span className="text-amber-600">Pendiente de pago</span>
+                  )}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={() => setShowPayment(true)} className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition shadow-sm flex items-center gap-2">
+                <Sparkles className="w-4 h-4" /> {hasOwnSubscription ? 'Renovar' : 'Comprar Plan'}
+              </button>
+              <button onClick={() => setActiveView('history')} className="px-5 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-[10px] font-black uppercase hover:bg-gray-200 transition flex items-center gap-2">
+                <History className="w-4 h-4" /> Historial
+              </button>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <button onClick={() => setShowPayment(true)} className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition shadow-sm flex items-center gap-2">
-              <Sparkles className="w-4 h-4" /> {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE ? 'Renovar' : 'Comprar Plan'}
-            </button>
-            <button onClick={() => setActiveView('history')} className="px-5 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-[10px] font-black uppercase hover:bg-gray-200 transition flex items-center gap-2">
-              <History className="w-4 h-4" /> Historial
-            </button>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* MOVIMIENTOS RECIENTES */}
@@ -1284,9 +1337,9 @@ export const UserDashboard: React.FC = () => {
            <div className="p-6 border-b">
               <h3 className="font-black text-gray-800 mb-4 flex items-center text-xs uppercase tracking-widest"><FileText className="w-5 h-5 mr-2 text-brand-600" /> Mi Buzón Tributario</h3>
                <div className="flex bg-gray-50 p-1 rounded-xl">
-                   {['all', 'rh', 'factura', 'pdt', 'contador'].map(f => (
+                   {['all', 'rh', 'factura', 'nc', 'nd', 'pdt', 'contador'].map(f => (
                      <button key={f} onClick={() => setDocFilter(f as any)} className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${docFilter === f ? 'bg-white text-brand-600 shadow-sm border border-brand-100' : 'text-gray-400'}`}>
-                       {f === 'all' ? 'Todo' : f === 'rh' ? 'RH' : f === 'factura' ? 'Factura' : f === 'pdt' ? 'PDT' : 'Contador'}
+                       {f === 'all' ? 'Todo' : f === 'rh' ? 'RH' : f === 'factura' ? 'Factura' : f === 'nc' ? 'N.Crédito' : f === 'nd' ? 'N.Débito' : f === 'pdt' ? 'PDT' : 'Contador'}
                      </button>
                    ))}
                </div>
@@ -1422,6 +1475,24 @@ export const UserDashboard: React.FC = () => {
     />
   )}
 
+  {showNcModal && (
+    <NoteWizard
+      isOpen={showNcModal}
+      onClose={() => setShowNcModal(false)}
+      onEmitted={(doc) => handleInvoiceEmitted({ id: doc.id, name: doc.name, sunatStatus: doc.sunatStatus || 'SENT', xmlContent: doc.xmlContent, cdrBase64: doc.cdrBase64, amount: doc.metadata?.amount, customerName: doc.metadata?.recipientName })}
+      initialType="nota_credito"
+    />
+  )}
+
+  {showNdModal && (
+    <NoteWizard
+      isOpen={showNdModal}
+      onClose={() => setShowNdModal(false)}
+      onEmitted={(doc) => handleInvoiceEmitted({ id: doc.id, name: doc.name, sunatStatus: doc.sunatStatus || 'SENT', xmlContent: doc.xmlContent, cdrBase64: doc.cdrBase64, amount: doc.metadata?.amount, customerName: doc.metadata?.recipientName })}
+      initialType="nota_debito"
+    />
+  )}
+
   {/* MODAL CREAR SUB USUARIO */}
   {showCreateSubUser && (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 overflow-y-auto">
@@ -1513,9 +1584,15 @@ export const UserDashboard: React.FC = () => {
           </div>
           <div>
             <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">RUC</label>
-            <input type="text" maxLength={11} placeholder="20123456789 (opcional)"
-              className="w-full border-2 border-gray-200 p-3 rounded-xl text-sm font-mono font-bold text-gray-900 outline-none focus:border-brand-600"
-              value={companyForm.ruc} onChange={e => setCompanyForm(p => ({ ...p, ruc: e.target.value }))} />
+            <div className="relative">
+              <input type="text" maxLength={11} placeholder="20123456789 (opcional)"
+                className="w-full border-2 border-gray-200 p-3 pr-12 rounded-xl text-sm font-mono font-bold text-gray-900 outline-none focus:border-brand-600"
+                value={companyForm.ruc} onChange={e => setCompanyForm(p => ({ ...p, ruc: e.target.value }))} />
+              <button type="button" onClick={handleSearchCompanyRuc} disabled={isSearchingRuc || companyForm.ruc.replace(/\D/g, '').length !== 11}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-brand-100 text-brand-700 rounded-lg hover:bg-brand-200 disabled:opacity-50 transition">
+                {isSearchingRuc ? <Loader2 className="w-4 h-4 animate-spin"/> : <Search className="w-4 h-4"/>}
+              </button>
+            </div>
           </div>
           <div>
             <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Razón Social</label>

@@ -13,6 +13,7 @@ interface StoreContextType {
   expenses: Expense[];
   taxDocuments: TaxDocument[];
   packages: SubscriptionPackage[];
+  accountantPackages: SubscriptionPackage[];
   paymentMethods: PaymentMethod[];
   subscriptionHistory: SubscriptionRecord[];
   notifications: AdminNotification[];
@@ -42,6 +43,7 @@ interface StoreContextType {
   deleteSubUser: (userId: string) => void;
   updatePaymentMethod: (id: string, details: Partial<PaymentMethod>) => void;
   updatePackage: (id: string, details: Partial<SubscriptionPackage>) => void;
+  updateAccountantPackage: (id: string, details: Partial<SubscriptionPackage>) => void;
   assignAccountant: (companyId: string, accountantId: string) => void;
   addSubscriptionRecord: (record: SubscriptionRecord) => void;
   updateSubscriptionRecord: (id: string, details: Partial<SubscriptionRecord>) => void;
@@ -79,6 +81,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [expenses, setExpenses] = useState<Expense[]>(() => loadFromLS('ff_expenses', []));
   const [taxDocuments, setTaxDocuments] = useState<TaxDocument[]>(() => loadFromLS('ff_tax_docs', []));
   const [packages, setPackages] = useState<SubscriptionPackage[]>(() => loadFromLS('ff_packages', []));
+  const [accountantPackages, setAccountantPackages] = useState<SubscriptionPackage[]>(() => loadFromLS('ff_accountant_packages', []));
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(() => loadFromLS('ff_payment_methods', []));
   const [subscriptionHistory, setSubscriptionHistory] = useState<SubscriptionRecord[]>(() => loadFromLS('ff_subscription_history', []));
   const [notifications, setNotifications] = useState<AdminNotification[]>([]);
@@ -96,12 +99,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let cancelled = false;
     const init = async () => {
       try {
-        const [u, comp, e, td, pkg, pm, sh, cp, up, pi, sc, n] = await Promise.all([
+        const [u, comp, e, td, pkg, apkg, pm, sh, cp, up, pi, sc, n] = await Promise.all([
           api.fetchUsers().catch(() => loadFromLS('ff_users', [])),
           api.fetchCompanies().catch(() => loadFromLS('ff_companies', [])),
           api.fetchExpenses().catch(() => loadFromLS('ff_expenses', [])),
           api.fetchTaxDocuments().catch(() => loadFromLS('ff_tax_docs', [])),
-          api.fetchPackages().catch(() => loadFromLS('ff_packages', [])),
+          api.fetchPackages('CLIENT').catch(() => loadFromLS('ff_packages', [])),
+          api.fetchPackages('ACCOUNTANT').catch(() => loadFromLS('ff_accountant_packages', [])),
           api.fetchPaymentMethods().catch(() => loadFromLS('ff_payment_methods', [])),
           api.fetchSubscriptionHistory().catch(() => loadFromLS('ff_subscription_history', [])),
           api.fetchComplaints().catch(() => loadFromLS('ff_complaints', [])),
@@ -123,6 +127,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setExpenses(e);
         setTaxDocuments(td);
         setPackages(pkg);
+        setAccountantPackages(apkg);
         setPaymentMethods(pm);
         setSubscriptionHistory(sh);
         setComplaints(cp);
@@ -146,6 +151,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { localStorage.setItem('ff_expenses', JSON.stringify(expenses)); }, [expenses]);
   useEffect(() => { localStorage.setItem('ff_tax_docs', JSON.stringify(taxDocuments)); }, [taxDocuments]);
   useEffect(() => { localStorage.setItem('ff_packages', JSON.stringify(packages)); }, [packages]);
+  useEffect(() => { localStorage.setItem('ff_accountant_packages', JSON.stringify(accountantPackages)); }, [accountantPackages]);
   useEffect(() => { localStorage.setItem('ff_payment_methods', JSON.stringify(paymentMethods)); }, [paymentMethods]);
   useEffect(() => { localStorage.setItem('ff_subscription_history', JSON.stringify(subscriptionHistory)); }, [subscriptionHistory]);
   useEffect(() => { localStorage.setItem('ff_complaints', JSON.stringify(complaints)); }, [complaints]);
@@ -269,6 +275,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPackages(prev => prev.map(p => p.id === id ? { ...p, ...details } : p));
   };
 
+  const updateAccountantPackage = (id: string, details: Partial<SubscriptionPackage>) => {
+    const pkg = accountantPackages.find(p => p.id === id);
+    if (pkg) {
+      api.updatePackage(id, { ...pkg, ...details }).catch(() => {});
+    }
+    setAccountantPackages(prev => prev.map(p => p.id === id ? { ...p, ...details } : p));
+  };
+
   const assignAccountant = (companyId: string, accountantId: string) => {
     api.updateCompany(companyId, { assignedAccountantId: accountantId }).catch(() => {});
     setCompanies(prev => prev.map(c => c.id === companyId ? { ...c, assignedAccountantId: accountantId } : c));
@@ -380,12 +394,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const refreshData = async () => {
     try {
-      const [u, comp, e, td, pkg, pm, sh, cp, up, pi, sc, n] = await Promise.all([
+      const [u, comp, e, td, pkg, apkg, pm, sh, cp, up, pi, sc, n] = await Promise.all([
         api.fetchUsers().catch(() => users),
         api.fetchCompanies().catch(() => companies),
         api.fetchExpenses().catch(() => expenses),
         api.fetchTaxDocuments().catch(() => taxDocuments),
-        api.fetchPackages().catch(() => packages),
+        api.fetchPackages('CLIENT').catch(() => packages),
+        api.fetchPackages('ACCOUNTANT').catch(() => accountantPackages),
         api.fetchPaymentMethods().catch(() => paymentMethods),
         api.fetchSubscriptionHistory().catch(() => subscriptionHistory),
         api.fetchComplaints().catch(() => complaints),
@@ -399,6 +414,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setExpenses(e);
       setTaxDocuments(td);
       setPackages(pkg);
+      setAccountantPackages(apkg);
       setPaymentMethods(pm);
       setSubscriptionHistory(sh);
       setComplaints(cp);
@@ -413,9 +429,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   return (
     <StoreContext.Provider value={{
-      currentUser, currentSubUser, isSubUser, users, companies, selectedCompanyId, selectedCompany, expenses, taxDocuments, packages, paymentMethods, subscriptionHistory, notifications, complaints, sunatGlobalConfig, userProducts, pendingInvoices, loading,
+      currentUser, currentSubUser, isSubUser, users, companies, selectedCompanyId, selectedCompany, expenses, taxDocuments, packages, accountantPackages, paymentMethods, subscriptionHistory, notifications, complaints, sunatGlobalConfig, userProducts, pendingInvoices, loading,
       login, logout, registerUser, updateUser, updateUserStatus, addExpense, addTaxDocument, deleteTaxDocument, changePassword, generatePassword,
-      deleteUser, addSubUser, deleteSubUser, updatePaymentMethod, updatePackage, assignAccountant, addSubscriptionRecord, updateSubscriptionRecord,
+      deleteUser, addSubUser, deleteSubUser, updatePaymentMethod, updatePackage, updateAccountantPackage, assignAccountant, addSubscriptionRecord, updateSubscriptionRecord,
       addNotification, markNotificationAsRead, addComplaint, updateComplaintStatus, updateSunatGlobalConfig, addUserProduct, removeUserProduct,
       addPendingInvoice, removePendingInvoice, updatePendingInvoiceStatus,
       addCompany, updateCompany, deleteCompany, selectCompany,

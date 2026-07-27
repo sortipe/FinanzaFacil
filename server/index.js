@@ -216,6 +216,63 @@ app.post('/consultar-cpe', async (req, res) => {
     }
 });
 
+// --- Emitir Nota de Crédito / Débito ---
+app.post('/emitir-nota', async (req, res) => {
+    try {
+        const { noteData, credentials, noteType } = req.body;
+        const currentConfig = {
+            ruc: credentials?.ruc || config.ruc,
+            user: credentials?.user || config.user,
+            pass: credentials?.pass || config.pass,
+            env: credentials?.env || config.env,
+            certData: credentials?.certBase64 || config.certPath,
+            certPass: credentials?.certPass || config.certPass
+        };
+        const engine = new SunatEngine(currentConfig);
+
+        // Build XML según tipo
+        const isCredit = noteType === 'nota_credito';
+        const xml = isCredit
+            ? engine.buildCreditNoteXml(noteData)
+            : engine.buildDebitNoteXml(noteData);
+
+        // Sign
+        const rootElement = isCredit ? 'CreditNote' : 'DebitNote';
+        const signedXml = await engine.signXml(xml, currentConfig.certData, currentConfig.certPass, rootElement);
+
+        // Serie for NC: FC01 (factura crédito) / BC01 (boleta crédito)
+        // Serie for ND: FD01 (factura débito) / BD01 (boleta débito)
+        const fileName = `${noteData.id}`;
+
+        // Send to SUNAT
+        const response = await engine.sendToSunat(fileName, signedXml, currentConfig);
+        const isAccepted = !response.includes('<soap-env:Fault') && !response.includes('<soap:Fault');
+
+        // Extract CDR
+        const cdrMatch = response.match(/<applicationResponse>([\s\S]*?)<\/applicationResponse>/);
+        let cdrBase64 = null;
+        if (cdrMatch) {
+            cdrBase64 = cdrMatch[1].trim();
+        }
+
+        res.json({
+            success: isAccepted,
+            xmlContent: signedXml,
+            cdrBase64,
+            sunatStatus: isAccepted ? 'SENT' : 'REJECTED',
+            raw: response
+        });
+    } catch (error) {
+        const sunatDetail = error.response?.data || error.message;
+        const faultMatch = typeof sunatDetail === 'string' && sunatDetail.match(/<faultstring>([^<]+)<\/faultstring>/);
+        res.status(500).json({
+            success: false,
+            error: faultMatch ? faultMatch[1] : 'Error al emitir nota',
+            raw: sunatDetail
+        });
+    }
+});
+
 // Atrapatodo de errores
 app.use((err, req, res, next) => {
     console.error('--- ERROR GLOBAL DETECTADO ---');

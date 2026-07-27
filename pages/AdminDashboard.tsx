@@ -2,8 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
 import { UserRole, SubscriptionStatus, User, SubscriptionRecord, Company } from '../types';
 // Fixed: Aliased User as UserIcon from lucide-react to avoid name collision with User type
-import { User as UserIcon, Users, Trash2, Edit2, Shield, CreditCard, Save, History, X, PlusCircle, UserPlus, Check, Bell, Info, QrCode, Upload, Building, MapPin, Hash, Settings, Package, DollarSign, Smartphone, Globe, ExternalLink, Book, CheckCircle2, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { User as UserIcon, Users, Trash2, Edit2, Shield, CreditCard, Save, History, X, PlusCircle, UserPlus, Check, Bell, Info, QrCode, Upload, Building, MapPin, Hash, Settings, Package, DollarSign, Smartphone, Globe, ExternalLink, Book, CheckCircle2, Loader2, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { fileToBase64 } from '../services/geminiService';
+import { consultaService } from '../services/consultaService';
 
 export const AdminDashboard: React.FC = () => {
   const { 
@@ -16,7 +17,9 @@ export const AdminDashboard: React.FC = () => {
     updateCompany,
     deleteCompany,
     packages, 
-    updatePackage, 
+    accountantPackages,
+    updatePackage,
+    updateAccountantPackage,
     paymentMethods, 
     updatePaymentMethod, 
     subscriptionHistory, 
@@ -55,11 +58,14 @@ export const AdminDashboard: React.FC = () => {
   // --- SETTINGS STATES ---
   const [editingPackageId, setEditingPackageId] = useState<string | null>(null);
   const [tempPrice, setTempPrice] = useState<string>('');
+  const [editingAccountantPackageId, setEditingAccountantPackageId] = useState<string | null>(null);
+  const [tempAccountantPrice, setTempAccountantPrice] = useState<string>('');
   
   const [editingMethodId, setEditingMethodId] = useState<string | null>(null);
   const [tempDetails, setTempDetails] = useState<string>('');
   const [tempQrImage, setTempQrImage] = useState<string | undefined>(undefined);
   const qrFileInputRef = useRef<HTMLInputElement>(null);
+  const [isSearchingRuc, setIsSearchingRuc] = useState(false);
 
   // --- HISTORY STATES ---
   const [viewHistoryUser, setViewHistoryUser] = useState<User | null>(null);
@@ -93,17 +99,21 @@ export const AdminDashboard: React.FC = () => {
     assignedAccountantId: '',
     solUser: '',
     solPass: '',
+    certBase64: '',
+    certPass: '',
     serieFactura: 'F001',
     serieBoleta: 'B001',
     sunatEnv: 'SANDBOX' as 'SANDBOX' | 'PRODUCTION',
   });
+  const certFileInputRef = useRef<HTMLInputElement>(null);
 
   const handleOpenCreateCompany = () => {
     setEditingCompany(null);
     setCompanyFormData({
       name: '', ruc: '', businessName: '', taxAddress: '',
       ownerUserId: '', assignedAccountantId: '',
-      solUser: '', solPass: '', serieFactura: 'F001', serieBoleta: 'B001', sunatEnv: 'SANDBOX',
+      solUser: '', solPass: '', certBase64: '', certPass: '',
+      serieFactura: 'F001', serieBoleta: 'B001', sunatEnv: 'SANDBOX',
     });
     setShowCompanyModal(true);
   };
@@ -115,6 +125,7 @@ export const AdminDashboard: React.FC = () => {
       taxAddress: company.taxAddress || '', ownerUserId: company.ownerUserId,
       assignedAccountantId: company.assignedAccountantId || '',
       solUser: company.solUser || '', solPass: company.solPass || '',
+      certBase64: company.certBase64 || '', certPass: company.certPass || '',
       serieFactura: company.serieFactura || 'F001', serieBoleta: company.serieBoleta || 'B001',
       sunatEnv: company.sunatEnv || 'SANDBOX',
     });
@@ -148,6 +159,34 @@ export const AdminDashboard: React.FC = () => {
   const savePackage = (id: string) => {
     updatePackage(id, { price: parseFloat(tempPrice) });
     setEditingPackageId(null);
+  };
+
+  const handleEditAccountantPackage = (pkg: any) => {
+    setEditingAccountantPackageId(pkg.id);
+    setTempAccountantPrice(pkg.price.toString());
+  };
+
+  const saveAccountantPackage = (id: string) => {
+    updateAccountantPackage(id, { price: parseFloat(tempAccountantPrice) });
+    setEditingAccountantPackageId(null);
+  };
+
+  const handleSearchCompanyRuc = async () => {
+    const ruc = companyFormData.ruc.replace(/\D/g, '');
+    if (ruc.length !== 11) { alert('El RUC debe tener 11 dígitos'); return; }
+    setIsSearchingRuc(true);
+    try {
+      const res = await consultaService.consultarRUC(ruc);
+      if (res.success && res.razonSocial) {
+        setCompanyFormData(p => ({ ...p, businessName: res.razonSocial || '', taxAddress: res.address || '' }));
+      } else {
+        alert(res.error || 'No se encontró el RUC');
+      }
+    } catch {
+      alert('Error al consultar RUC');
+    } finally {
+      setIsSearchingRuc(false);
+    }
   };
 
   const handleEditMethod = (method: any) => {
@@ -933,6 +972,46 @@ export const AdminDashboard: React.FC = () => {
               </div>
            </div>
 
+           {/* GESTIÓN DE PLANES CONTADOR */}
+           <div className="bg-white p-8 rounded-[2.5rem] border-2 border-gray-100 shadow-sm space-y-6">
+              <div className="flex items-center space-x-3 mb-2">
+                 <div className="p-3 bg-blue-50 rounded-2xl text-blue-600"><UserIcon className="w-6 h-6"/></div>
+                 <h3 className="text-sm font-black uppercase tracking-widest text-gray-800">Planes Contadores</h3>
+              </div>
+              
+              <div className="space-y-4">
+                 {accountantPackages.map(pkg => (
+                   <div key={pkg.id} className="p-6 bg-gray-50 rounded-3xl border border-gray-100 flex items-center justify-between group">
+                      <div>
+                         <p className="text-xs font-black text-gray-900 uppercase tracking-tighter mb-1">{pkg.name}</p>
+                         {editingAccountantPackageId === pkg.id ? (
+                            <div className="flex items-center space-x-2 mt-2">
+                               <div className="relative">
+                                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                                  <input 
+                                    type="number" 
+                                    className="bg-white border-2 border-blue-200 rounded-xl p-2 pl-8 text-sm font-black text-gray-900 w-24 outline-none focus:border-blue-500" 
+                                    value={tempAccountantPrice} 
+                                    onChange={e => setTempAccountantPrice(e.target.value)} 
+                                  />
+                               </div>
+                               <button onClick={() => saveAccountantPackage(pkg.id)} className="p-2 bg-green-500 text-white rounded-xl shadow-lg"><Check className="w-4 h-4"/></button>
+                            </div>
+                         ) : (
+                            <p className="text-xl font-black text-blue-700">S/ {pkg.price.toFixed(2)} <span className="text-[10px] text-gray-400">/ {pkg.durationMonths === 1 ? 'mes' : 'año'}</span></p>
+                         )}
+                      </div>
+                      <button onClick={() => handleEditAccountantPackage(pkg)} className="p-3 bg-white border border-gray-200 text-gray-400 rounded-2xl hover:text-blue-600 hover:border-blue-200 shadow-sm transition opacity-0 group-hover:opacity-100">
+                         <Edit2 className="w-4 h-4" />
+                      </button>
+                   </div>
+                 ))}
+                 {accountantPackages.length === 0 && (
+                    <p className="text-xs text-gray-400 text-center py-4">No hay planes de contador configurados</p>
+                 )}
+              </div>
+           </div>
+
            {/* MÉTODOS DE PAGO Y QR */}
            <div className="bg-white p-8 rounded-[2.5rem] border-2 border-gray-100 shadow-sm space-y-6">
               <div className="flex items-center space-x-3 mb-2">
@@ -1070,7 +1149,7 @@ export const AdminDashboard: React.FC = () => {
                       <option value={UserRole.ADMIN}>Administrador Sistema</option>
                     </select>
                   </div>
-                  {userFormData.role === UserRole.USER && (
+                  {(userFormData.role === UserRole.USER || userFormData.role === UserRole.ACCOUNTANT) && (
                     <div>
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Estado</label>
                       <select className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-black text-gray-900 bg-white" value={userFormData.subscriptionStatus} onChange={e => setUserFormData({...userFormData, subscriptionStatus: e.target.value as SubscriptionStatus})}>
@@ -1243,7 +1322,13 @@ export const AdminDashboard: React.FC = () => {
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">RUC</label>
-                  <input type="text" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.ruc} onChange={e => setCompanyFormData({...companyFormData, ruc: e.target.value})} maxLength={11} placeholder="20123456789" />
+                  <div className="relative">
+                    <input type="text" className="w-full border-2 border-gray-100 p-3.5 pr-12 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.ruc} onChange={e => setCompanyFormData({...companyFormData, ruc: e.target.value})} maxLength={11} placeholder="20123456789" />
+                    <button type="button" onClick={handleSearchCompanyRuc} disabled={isSearchingRuc || companyFormData.ruc.replace(/\D/g, '').length !== 11}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-brand-100 text-brand-700 rounded-xl hover:bg-brand-200 disabled:opacity-50 transition">
+                      {isSearchingRuc ? <Loader2 className="w-4 h-4 animate-spin"/> : <Search className="w-4 h-4"/>}
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">DNI</label>
@@ -1283,6 +1368,31 @@ export const AdminDashboard: React.FC = () => {
                   <div>
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Clave SOL</label>
                     <input type="password" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.solPass} onChange={e => setCompanyFormData({...companyFormData, solPass: e.target.value})} placeholder="*****" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Certificado Digital (.pfx)</label>
+                    <input type="file" ref={certFileInputRef} accept=".pfx,.p12" className="hidden" onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const base64 = await fileToBase64(file);
+                      setCompanyFormData(p => ({ ...p, certBase64: base64 }));
+                    }} />
+                    {companyFormData.certBase64 ? (
+                      <div className="flex items-center gap-2 p-3 bg-green-50 border-2 border-green-200 rounded-2xl">
+                        <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />
+                        <span className="text-xs font-bold text-green-800 truncate flex-1">Certificado cargado</span>
+                        <button type="button" onClick={() => { setCompanyFormData(p => ({ ...p, certBase64: '' })); if (certFileInputRef.current) certFileInputRef.current.value = ''; }} className="text-red-500 hover:text-red-700"><X className="w-4 h-4" /></button>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={() => certFileInputRef.current?.click()}
+                        className="w-full border-2 border-dashed border-gray-300 p-3.5 rounded-2xl text-xs font-black text-gray-400 uppercase hover:border-brand-400 hover:text-brand-600 transition flex items-center justify-center gap-2">
+                        <Upload className="w-4 h-4" /> Seleccionar Certificado
+                      </button>
+                    )}
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Contraseña Certificado</label>
+                    <input type="password" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={companyFormData.certPass} onChange={e => setCompanyFormData({...companyFormData, certPass: e.target.value})} placeholder="*****" />
                   </div>
                   <div>
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Serie Factura</label>

@@ -42,7 +42,7 @@ export const createTaxDocument = (doc: any): Promise<any> => request('/tax-docum
 export const deleteTaxDocument = (id: string): Promise<any> => request(`/tax-documents/${id}`, { method: 'DELETE' });
 
 // Packages
-export const fetchPackages = (): Promise<any> => request('/packages');
+export const fetchPackages = (type?: string): Promise<any> => request(`/packages${buildQuery({ type })}`);
 export const createPackage = (pkg: any): Promise<any> => request('/packages', { method: 'POST', body: JSON.stringify(pkg) });
 export const updatePackage = (id: string, data: any): Promise<any> => request(`/packages/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deletePackage = (id: string): Promise<any> => request(`/packages/${id}`, { method: 'DELETE' });

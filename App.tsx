@@ -9,10 +9,10 @@ import { Payment } from './pages/Payment';
 import { UserRole, SubscriptionStatus } from './types';
 
 const MainApp: React.FC = () => {
-  const { currentUser, updateUser, logout } = useStore();
+  const { currentUser, updateUser, logout, companies, users } = useStore();
 
   useEffect(() => {
-    if (currentUser?.role === UserRole.USER && currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE && currentUser.subscriptionEndDate) {
+    if ((currentUser?.role === UserRole.USER || currentUser?.role === UserRole.ACCOUNTANT) && currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE && currentUser.subscriptionEndDate) {
       const today = new Date().toISOString().split('T')[0];
       if (currentUser.subscriptionEndDate < today) {
         updateUser(currentUser.id, { subscriptionStatus: SubscriptionStatus.EXPIRED });
@@ -24,25 +24,54 @@ const MainApp: React.FC = () => {
     return <Auth />;
   }
 
+  // Check own subscription
+  const hasOwnSubscription = currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE;
+
+  // For USER role: check if accountant has active subscription (inheritance)
+  // For ACCOUNTANT role: check if any client USER has active subscription (inheritance)
+  let hasInheritedSubscription = false;
+  if (currentUser.role === UserRole.USER) {
+    const clientCompanies = companies.filter(c => c.ownerUserId === currentUser.id);
+    const accountantId = clientCompanies.find(c => c.assignedAccountantId)?.assignedAccountantId;
+    if (accountantId) {
+      const accountant = users.find(u => u.id === accountantId);
+      if (accountant && accountant.subscriptionStatus === SubscriptionStatus.ACTIVE) {
+        hasInheritedSubscription = true;
+      }
+    }
+  } else if (currentUser.role === UserRole.ACCOUNTANT) {
+    // Find all companies where this accountant is assigned
+    const assignedCompanies = companies.filter(c => c.assignedAccountantId === currentUser.id);
+    // Check if ANY of those company owners has an active subscription
+    for (const comp of assignedCompanies) {
+      const owner = users.find(u => u.id === comp.ownerUserId && u.role === UserRole.USER);
+      if (owner && owner.subscriptionStatus === SubscriptionStatus.ACTIVE) {
+        hasInheritedSubscription = true;
+        break;
+      }
+    }
+  }
+
+  const hasActiveSubscription = hasOwnSubscription || hasInheritedSubscription;
+  const needsSubscription = !hasActiveSubscription;
+
   // Role Based Routing
   const renderDashboard = () => {
     switch (currentUser.role) {
       case UserRole.ADMIN:
         return <AdminDashboard />;
       case UserRole.ACCOUNTANT:
+        if (needsSubscription) return <Payment />;
         return <AccountantDashboard />;
       case UserRole.USER:
-        if (currentUser.subscriptionStatus !== SubscriptionStatus.ACTIVE) {
-          return <Payment />;
-        }
+        if (needsSubscription) return <Payment />;
         return <UserDashboard />;
       default:
         return <div>Rol desconocido</div>;
     }
   };
 
-  // If user is pending payment, they shouldn't see the sidebar layout for the dashboard
-  if (currentUser.role === UserRole.USER && currentUser.subscriptionStatus !== SubscriptionStatus.ACTIVE) {
+  if (needsSubscription && (currentUser.role === UserRole.USER || currentUser.role === UserRole.ACCOUNTANT)) {
     return (
         <>
             <div className="fixed top-0 right-0 p-6 z-50">

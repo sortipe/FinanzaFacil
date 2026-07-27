@@ -42,14 +42,15 @@ const TAXDOC_FIELDS = {
   id: 'id', user_id: 'userId', company_id: 'companyId', accountant_id: 'accountantId', name: 'name',
   file_url: 'fileUrl', mime_type: 'mimeType', upload_date: 'uploadDate',
   period_month: 'periodMonth', period_year: 'periodYear', sunat_status: 'sunatStatus',
-  sunat_hash: 'sunatHash', uploaded_by: 'uploadedBy', pdf_url: 'pdfUrl',
+  sunat_hash: 'sunatHash', uploaded_by: 'uploadedBy', document_type: 'documentType',
+  original_document_id: 'originalDocumentId', pdf_url: 'pdfUrl',
   xml_url: 'xmlUrl', cdr_url: 'cdrUrl', xml_content: 'xmlContent',
   cdr_base64: 'cdrBase64', created_at: 'createdAt'
 };
 
 const PACKAGE_FIELDS = {
   id: 'id', name: 'name', price: 'price', duration_months: 'durationMonths',
-  features: 'features', created_at: 'createdAt'
+  features: 'features', type: 'type', created_at: 'createdAt'
 };
 
 const PAYMENT_METHOD_FIELDS = {
@@ -76,7 +77,8 @@ const USERPRODUCT_FIELDS = {
 
 const PENDINGINV_FIELDS = {
   id: 'id', user_id: 'userId', company_id: 'companyId', serie: 'serie', correlative: 'correlative',
-  document_type: 'documentType', customer_doc_type: 'customerDocType',
+  document_type: 'documentType', original_document_id: 'originalDocumentId',
+  customer_doc_type: 'customerDocType',
   customer_doc_number: 'customerDocNumber', customer_name: 'customerName',
   amount: 'amount', created_at: 'createdAt', last_attempt: 'lastAttempt',
   attempt_count: 'attemptCount', status: 'status', last_error: 'lastError'
@@ -274,10 +276,11 @@ router.get('/tax-documents', async (req, res) => {
 router.post('/tax-documents', async (req, res) => {
   try {
     const d = req.body;
-    await db.query(`INSERT INTO tax_documents (id, user_id, company_id, accountant_id, name, file_url, mime_type, upload_date, period_month, period_year, sunat_status, sunat_hash, uploaded_by, pdf_url, xml_url, cdr_url, xml_content, cdr_base64, metadata) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+    await db.query(`INSERT INTO tax_documents (id, user_id, company_id, accountant_id, name, file_url, mime_type, upload_date, period_month, period_year, sunat_status, sunat_hash, uploaded_by, document_type, original_document_id, pdf_url, xml_url, cdr_url, xml_content, cdr_base64, metadata) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
       d.id, d.userId, d.companyId || null, d.accountantId || null, d.name || null, d.fileUrl || null, d.mimeType || null,
       d.uploadDate || null, d.periodMonth || null, d.periodYear || null, d.sunatStatus || null,
-      d.sunatHash || null, d.uploadedBy || null, d.pdfUrl || null, d.xmlUrl || null, d.cdrUrl || null,
+      d.sunatHash || null, d.uploadedBy || null, d.documentType || null, d.originalDocumentId || null,
+      d.pdfUrl || null, d.xmlUrl || null, d.cdrUrl || null,
       d.xmlContent || null, d.cdrBase64 || null, d.metadata ? JSON.stringify(d.metadata) : null
     ]);
     res.json({ success: true });
@@ -294,7 +297,12 @@ router.delete('/tax-documents/:id', async (req, res) => {
 // --- PACKAGES ---
 router.get('/packages', async (req, res) => {
   try {
-    const rows = await db.query('SELECT * FROM packages ORDER BY created_at ASC');
+    const { type } = req.query;
+    let query = 'SELECT * FROM packages';
+    const params = [];
+    if (type) { query += ' WHERE type = ?'; params.push(type); }
+    query += ' ORDER BY created_at ASC';
+    const rows = await db.query(query, params);
     res.json(rows.map(r => ({
       ...r, ...mapRow(r, PACKAGE_FIELDS),
       features: r.features ? (typeof r.features === 'string' ? JSON.parse(r.features) : r.features) : []
@@ -305,8 +313,8 @@ router.get('/packages', async (req, res) => {
 router.post('/packages', async (req, res) => {
   try {
     const p = req.body;
-    await db.query(`INSERT INTO packages (id, name, price, duration_months, features) VALUES (?,?,?,?,?)`, [
-      p.id, p.name, p.price, p.durationMonths, p.features ? JSON.stringify(p.features) : '[]'
+    await db.query(`INSERT INTO packages (id, name, price, duration_months, features, type) VALUES (?,?,?,?,?,?)`, [
+      p.id, p.name, p.price, p.durationMonths, p.features ? JSON.stringify(p.features) : '[]', p.type || 'CLIENT'
     ]);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -315,8 +323,8 @@ router.post('/packages', async (req, res) => {
 router.put('/packages/:id', async (req, res) => {
   try {
     const p = req.body;
-    await db.query(`UPDATE packages SET name=?, price=?, duration_months=?, features=? WHERE id=?`, [
-      p.name, p.price, p.durationMonths, p.features ? JSON.stringify(p.features) : '[]', req.params.id
+    await db.query(`UPDATE packages SET name=?, price=?, duration_months=?, features=?, type=? WHERE id=?`, [
+      p.name, p.price, p.durationMonths, p.features ? JSON.stringify(p.features) : '[]', p.type || 'CLIENT', req.params.id
     ]);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -495,8 +503,9 @@ router.get('/pending-invoices', async (req, res) => {
 router.post('/pending-invoices', async (req, res) => {
   try {
     const inv = req.body;
-    await db.query(`INSERT INTO pending_invoices (id, user_id, company_id, serie, correlative, document_type, payload, customer_doc_type, customer_doc_number, customer_name, amount, created_at, last_attempt, attempt_count, status, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+    await db.query(`INSERT INTO pending_invoices (id, user_id, company_id, serie, correlative, document_type, original_document_id, payload, customer_doc_type, customer_doc_number, customer_name, amount, created_at, last_attempt, attempt_count, status, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
       inv.id, inv.userId, inv.companyId || null, inv.serie || null, inv.correlative || null, inv.documentType || null,
+      inv.originalDocumentId || null,
       inv.payload ? JSON.stringify(inv.payload) : null, inv.customerDocType || null,
       inv.customerDocNumber || null, inv.customerName || null, inv.amount || 0,
       inv.createdAt || null, inv.lastAttempt || null, inv.attemptCount || 0, inv.status || 'PENDIENTE', inv.lastError || null

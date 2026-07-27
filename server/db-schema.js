@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS tax_documents (
   sunat_status VARCHAR(20),
   sunat_hash VARCHAR(255),
   uploaded_by VARCHAR(20),
+  document_type VARCHAR(30),
+  original_document_id VARCHAR(50),
   pdf_url TEXT,
   xml_url TEXT,
   cdr_url TEXT,
@@ -93,6 +95,7 @@ CREATE TABLE IF NOT EXISTS packages (
   price DECIMAL(10,2) NOT NULL,
   duration_months INT NOT NULL,
   features JSON,
+  type VARCHAR(20) DEFAULT 'CLIENT',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -157,6 +160,7 @@ CREATE TABLE IF NOT EXISTS pending_invoices (
   serie VARCHAR(10),
   correlative INT,
   document_type VARCHAR(20),
+  original_document_id VARCHAR(50),
   payload JSON,
   customer_doc_type VARCHAR(10),
   customer_doc_number VARCHAR(20),
@@ -291,6 +295,28 @@ const ALTER_AND_MIGRATE = async () => {
       }
     }
     console.log('Cleaned up legacy SUNAT columns from users table.');
+  }
+
+  // Add 'type' column to packages if missing
+  if (!(await columnExists('packages', 'type'))) {
+    await db.query("ALTER TABLE packages ADD COLUMN type VARCHAR(20) DEFAULT 'CLIENT'").catch(() => {});
+    console.log('Added type column to packages table.');
+  }
+
+  // Add NC/ND columns to tax_documents
+  const taxDocCols = [
+    ['document_type', "VARCHAR(30)"],
+    ['original_document_id', "VARCHAR(50)"],
+  ];
+  for (const [col, type] of taxDocCols) {
+    if (!(await columnExists('tax_documents', col))) {
+      await db.query(`ALTER TABLE tax_documents ADD COLUMN ${col} ${type}`).catch(() => {});
+    }
+  }
+
+  // Add original_document_id to pending_invoices
+  if (!(await columnExists('pending_invoices', 'original_document_id'))) {
+    await db.query("ALTER TABLE pending_invoices ADD COLUMN original_document_id VARCHAR(50)").catch(() => {});
   }
 };
 

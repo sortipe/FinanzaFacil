@@ -3,12 +3,13 @@ import { useStore } from '../context/StoreContext';
 import { UserRole, Expense, TaxDocument, SubscriptionStatus, AdminNotification, Company } from '../types';
 import { buildPdtCsv } from '../utils/pdtFormatter';
 import { consultaService } from '../services/consultaService';
+import { Payment } from './Payment';
 import {
   User as UserIcon, Users, ArrowLeft, ImageIcon, X, ShieldCheck, FileText,
   Tag, Clock, Hash, DollarSign, Lock, Upload, Trash2, FileUp, PlusCircle,
   Calendar, UserPlus, Building, MapPin, CreditCard, Download, FileSpreadsheet,
   Eye, Search, Loader2, AlertTriangle, CheckCircle2, BarChart3, ReceiptText,
-  TrendingUp, TrendingDown, Printer, Filter
+  TrendingUp, TrendingDown, Printer, Filter, CalendarDays, Sparkles, History
 } from 'lucide-react';
 
 const MONTHS = [
@@ -23,6 +24,7 @@ export const AccountantDashboard: React.FC = () => {
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
   const [showCreateClientModal, setShowCreateClientModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'clientes' | 'reporte' | 'subir'>('clientes');
+  const [showPayment, setShowPayment] = useState(false);
   const [searchClient, setSearchClient] = useState('');
 
   // Filtros mes/año para movimientos
@@ -70,21 +72,20 @@ export const AccountantDashboard: React.FC = () => {
     return users.filter(u => u.role === UserRole.USER && clientIds.has(u.id));
   }, [users, myCompanies]);
 
-  const filteredClients = useMemo(() => {
+  const filteredCompanies = useMemo(() => {
     const base = selectedCompanyId
-      ? users.filter(u => {
-          const company = myCompanies.find(c => c.id === selectedCompanyId);
-          return company && u.id === company.ownerUserId;
-        })
-      : myClients;
+      ? myCompanies.filter(c => c.id === selectedCompanyId)
+      : myCompanies;
     if (!searchClient) return base;
     const q = searchClient.toLowerCase();
-    return base.filter(c =>
-      c.name.toLowerCase().includes(q) ||
-      (c.ruc && c.ruc.includes(q)) ||
-      (c.businessName && c.businessName.toLowerCase().includes(q))
-    );
-  }, [myClients, myCompanies, selectedCompanyId, users, searchClient]);
+    return base.filter(c => {
+      const owner = users.find(u => u.id === c.ownerUserId);
+      return (c.name && c.name.toLowerCase().includes(q)) ||
+        (c.ruc && c.ruc.includes(q)) ||
+        (c.businessName && c.businessName.toLowerCase().includes(q)) ||
+        (owner?.name && owner.name.toLowerCase().includes(q));
+    });
+  }, [myCompanies, selectedCompanyId, users, searchClient]);
 
   const handleCreateCompanyForClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,14 +124,15 @@ export const AccountantDashboard: React.FC = () => {
   };
 
   // ─── Clientes: obtener resumen del mes actual ───
-  const getClientMonthStats = (clientId: string) => {
+  const getCompanyMonthStats = (companyId: string) => {
     const now = new Date();
     const monthExpenses = expenses.filter(e =>
-      e.userId === clientId && !e.isPrivate &&
+      e.companyId === companyId && !e.isPrivate &&
       e.date.startsWith(now.toISOString().slice(0, 7))
     );
+    const company = myCompanies.find(c => c.id === companyId);
     const docs = taxDocuments.filter(d =>
-      d.userId === clientId && d.sunatStatus !== 'INTERNO' &&
+      d.userId === company?.ownerUserId && d.companyId === companyId && d.sunatStatus !== 'INTERNO' &&
       d.uploadDate?.startsWith(now.toISOString().slice(0, 7))
     );
     return {
@@ -351,10 +353,12 @@ export const AccountantDashboard: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <h2 className="text-2xl font-black text-gray-800">Mis Clientes</h2>
-        <button onClick={() => { setGeneratedPassword(generatePassword()); setShowCreateClientModal(true); }}
-          className="bg-brand-600 text-white px-5 py-3 rounded-xl hover:bg-brand-700 transition flex items-center font-bold text-sm shadow-lg shadow-brand-100">
-          <UserPlus className="w-4 h-4 mr-2" /> Nuevo Cliente
-        </button>
+        {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE && (
+          <button onClick={() => { setGeneratedPassword(generatePassword()); setShowCreateClientModal(true); }}
+            className="bg-brand-600 text-white px-5 py-3 rounded-xl hover:bg-brand-700 transition flex items-center font-bold text-sm shadow-lg shadow-brand-100">
+            <UserPlus className="w-4 h-4 mr-2" /> Nuevo Cliente
+          </button>
+        )}
       </div>
       {myCompanies.length > 1 && (
         <div className="flex items-center gap-3">
@@ -375,31 +379,31 @@ export const AccountantDashboard: React.FC = () => {
           onChange={e => setSearchClient(e.target.value)}
           className="w-full bg-white border-2 border-gray-200 p-3.5 pl-12 rounded-xl text-sm font-bold outline-none focus:border-brand-600" />
       </div>
-      {filteredClients.length === 0 ? (
+      {filteredCompanies.length === 0 ? (
         <div className="py-20 text-center text-gray-400">
           <Users className="w-16 h-16 mx-auto mb-4 opacity-30" />
-          <p className="font-black uppercase text-sm">No hay clientes asignados</p>
+          <p className="font-black uppercase text-sm">No hay empresas asignadas</p>
           <p className="text-xs mt-1">Crea un nuevo cliente con el botón superior</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filteredClients.map(client => {
-            const stats = getClientMonthStats(client.id);
-            const clientCompany = myCompanies.find(c => c.ownerUserId === client.id);
+          {filteredCompanies.map(company => {
+            const stats = getCompanyMonthStats(company.id);
+            const owner = users.find(u => u.id === company.ownerUserId);
             return (
-              <div key={client.id}
+              <div key={company.id}
                 className="bg-white rounded-2xl border-2 border-gray-100 p-5 hover:border-brand-400 hover:shadow-lg transition-all group">
                 <div className="flex items-center justify-between mb-4">
                   <div className="p-3 bg-brand-50 rounded-xl group-hover:bg-brand-100 transition">
-                    <UserIcon className="w-6 h-6 text-brand-600" />
+                    <Building className="w-6 h-6 text-brand-600" />
                   </div>
-                  <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full ${client.subscriptionStatus === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                    {client.subscriptionStatus === 'ACTIVE' ? 'Activo' : 'Pendiente'}
+                  <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full ${owner?.subscriptionStatus === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {owner?.subscriptionStatus === 'ACTIVE' ? 'Activo' : 'Pendiente'}
                   </span>
                 </div>
-                <h3 className="font-black text-gray-900 text-sm uppercase truncate">{client.name}</h3>
-                {clientCompany?.businessName && <p className="text-[10px] text-gray-500 font-bold truncate">{clientCompany.businessName}</p>}
-                <p className="text-[10px] text-gray-400 font-mono mt-1">RUC: {clientCompany?.ruc || '—'}</p>
+                <h3 className="font-black text-gray-900 text-sm uppercase truncate">{company.businessName || company.name}</h3>
+                <p className="text-[10px] text-gray-500 font-bold truncate">{owner?.name || 'Sin dueño'}</p>
+                <p className="text-[10px] text-gray-400 font-mono mt-1">RUC: {company.ruc || '—'}</p>
                 <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-2 gap-3 text-center">
                   <div>
                     <p className="text-lg font-black text-brand-600">S/ {(stats.totalGastos || 0).toFixed(2)}</p>
@@ -413,19 +417,10 @@ export const AccountantDashboard: React.FC = () => {
                 {stats.ultimoMovimiento && (
                   <p className="text-[8px] text-gray-400 mt-3 text-center">Último: {stats.ultimoMovimiento}</p>
                 )}
-                {!clientCompany ? (
-                  <button onClick={() => {
-                    setCompanyForClientForm({ name: client.name, ruc: '', businessName: '', taxAddress: '' });
-                    setShowCreateCompanyForClient(client.id);
-                  }} className="mt-4 w-full py-2.5 bg-brand-600 text-white rounded-xl font-black text-[10px] uppercase hover:bg-brand-700 transition flex items-center justify-center gap-2 shadow-sm">
-                    <Building className="w-3.5 h-3.5" /> Crear Empresa
-                  </button>
-                ) : (
-                  <button onClick={() => { setSelectedClientId(client.id); setActiveTab('clientes'); }}
-                    className="mt-4 w-full py-2.5 bg-gray-50 text-gray-600 rounded-xl font-black text-[10px] uppercase hover:bg-brand-50 hover:text-brand-600 transition border border-gray-200">
-                    Ver Movimientos
-                  </button>
-                )}
+                <button onClick={() => { setSelectedClientId(company.ownerUserId); setActiveTab('clientes'); }}
+                  className="mt-4 w-full py-2.5 bg-gray-50 text-gray-600 rounded-xl font-black text-[10px] uppercase hover:bg-brand-50 hover:text-brand-600 transition border border-gray-200">
+                  Ver Movimientos
+                </button>
               </div>
             );
           })}
@@ -1197,6 +1192,45 @@ export const AccountantDashboard: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* SUSCRIPCIÓN */}
+      {currentUser && (() => {
+        const hasOwnSubscription = currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE;
+        const assignedCompanies = companies.filter(c => c.assignedAccountantId === currentUser.id);
+        const ownerWithSub = assignedCompanies.find(c => {
+          const owner = users.find(u => u.id === c.ownerUserId && u.role === UserRole.USER);
+          return owner?.subscriptionStatus === SubscriptionStatus.ACTIVE;
+        });
+        const owner = ownerWithSub ? users.find(u => u.id === ownerWithSub.ownerUserId) : null;
+        const hasInherited = !hasOwnSubscription && !!owner;
+
+        return (
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-brand-100 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-2xl bg-brand-50"><CalendarDays className="w-6 h-6 text-brand-600"/></div>
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Suscripción</p>
+                <p className="text-sm font-black text-gray-900">
+                  {hasOwnSubscription ? (
+                    <>Activa hasta el {currentUser.subscriptionEndDate ? new Date(currentUser.subscriptionEndDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</>
+                  ) : hasInherited ? (
+                    <><span className="text-blue-600">Activa</span> <span className="text-[10px] text-gray-400">(vía cliente: {owner?.name})</span></>
+                  ) : currentUser.subscriptionStatus === SubscriptionStatus.EXPIRED ? (
+                    <span className="text-red-600">Vencida</span>
+                  ) : (
+                    <span className="text-amber-600">Pendiente de pago</span>
+                  )}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={() => setShowPayment(true)} className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition shadow-sm flex items-center gap-2">
+                <Sparkles className="w-4 h-4" /> {hasOwnSubscription ? 'Renovar' : 'Comprar Plan'}
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Tabs */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-1 flex gap-1 overflow-x-auto">
         {tabs.map(tab => {
@@ -1252,7 +1286,19 @@ export const AccountantDashboard: React.FC = () => {
               <button type="submit" className="w-full py-4 bg-brand-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-brand-700 transition shadow-lg">
                 <Building className="w-4 h-4 mr-2 inline" /> Crear Empresa
               </button>
-            </form>
+             </form>
+          </div>
+        </div>
+      )}
+
+      {showPayment && (
+        <div className="fixed inset-0 z-[120] bg-white overflow-y-auto">
+          <div className="sticky top-0 z-10 bg-white border-b p-4 flex justify-between items-center shadow-sm">
+            <h2 className="font-black text-sm uppercase tracking-widest text-gray-800">Planes de Suscripción</h2>
+            <button onClick={() => setShowPayment(false)} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200 transition"><X className="w-5 h-5 text-gray-500"/></button>
+          </div>
+          <div className="max-w-4xl mx-auto pb-12">
+            <Payment />
           </div>
         </div>
       )}

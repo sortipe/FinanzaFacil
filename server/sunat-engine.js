@@ -158,9 +158,298 @@ class SunatEngine {
     }
 
     /**
+     * Genera el XML UBL 2.1 para una Nota de Crédito
+     */
+    buildCreditNoteXml(data) {
+        const doc = create({ version: '1.0', encoding: 'UTF-8', standalone: 'no' })
+            .ele('CreditNote', {
+                'xmlns': 'urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2',
+                'xmlns:cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
+                'xmlns:cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+                'xmlns:ds': 'http://www.w3.org/2000/09/xmldsig#',
+                'xmlns:ext': 'urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2'
+            })
+            .com(`Generado por FinanzaFacil Motor Directo v5.2 - ${new Date().toLocaleString()}`);
+
+        doc.ele('ext:UBLExtensions')
+            .ele('ext:UBLExtension')
+                .ele('ext:ExtensionContent')
+                .up()
+            .up()
+        .up();
+
+        doc.ele('cbc:UBLVersionID').txt('2.1').up()
+           .ele('cbc:CustomizationID').txt('2.0').up()
+           .ele('cbc:ID').txt(data.id).up()
+           .ele('cbc:IssueDate').txt(data.issueDate).up()
+           .ele('cbc:IssueTime').txt(data.issueTime || '00:00:00').up()
+           .ele('cbc:DocumentCurrencyCode').txt(data.currency || 'PEN').up();
+
+        // BillingReference - referencia al documento original
+        doc.ele('cac:BillingReference')
+            .ele('cac:InvoiceDocumentReference')
+                .ele('cbc:ID').txt(data.originalDocId).up()
+                .ele('cbc:IssueDate').txt(data.originalDocDate).up()
+            .up()
+        .up();
+
+        // ReasonCode - motivo de la nota
+        if (data.reasonCode) {
+            doc.ele('cbc:Note').txt(data.reasonDescription || '').up();
+            doc.ele('cbc:CreditNoteTypeCode').txt(data.reasonCode).up();
+        }
+
+        // Signature
+        doc.ele('cac:Signature')
+                .ele('cbc:ID').txt(this.config.ruc).up()
+                .ele('cac:SignatoryParty')
+                    .ele('cac:PartyIdentification')
+                        .ele('cbc:ID').txt(this.config.ruc).up()
+                    .up()
+                    .ele('cac:PartyName')
+                        .ele('cbc:Name').txt(data.emitterName).up()
+                    .up()
+                .up()
+                .ele('cac:DigitalSignatureAttachment')
+                    .ele('cac:ExternalReference')
+                        .ele('cbc:URI').txt('#SignatureSUNAT').up()
+                    .up()
+                .up()
+            .up();
+
+        // Emisor
+        doc.ele('cac:AccountingSupplierParty')
+                .ele('cac:Party')
+                    .ele('cac:PartyIdentification')
+                        .ele('cbc:ID', { schemeID: '6' }).txt(this.config.ruc).up()
+                    .up()
+                    .ele('cac:PartyLegalEntity')
+                        .ele('cbc:RegistrationName').txt(data.emitterName).up()
+                    .up()
+                .up()
+            .up();
+
+        // Receptor
+        doc.ele('cac:AccountingCustomerParty')
+                .ele('cac:Party')
+                    .ele('cac:PartyIdentification')
+                        .ele('cbc:ID', { schemeID: data.customerType }).txt(data.customerRuc).up()
+                    .up()
+                    .ele('cac:PartyLegalEntity')
+                        .ele('cbc:RegistrationName').txt(data.customerName).up()
+                    .up()
+                .up()
+            .up();
+
+        // Impuestos
+        const total = parseFloat(data.total);
+        const gravada = total / 1.18;
+        const igv = total - gravada;
+
+        doc.ele('cac:TaxTotal')
+            .ele('cbc:TaxAmount', { currencyID: data.currency || 'PEN' }).txt(igv.toFixed(2)).up()
+            .ele('cac:TaxSubtotal')
+                .ele('cbc:TaxableAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+                .ele('cbc:TaxAmount', { currencyID: data.currency || 'PEN' }).txt(igv.toFixed(2)).up()
+                .ele('cac:TaxCategory')
+                    .ele('cac:TaxScheme')
+                        .ele('cbc:ID').txt('1000').up()
+                        .ele('cbc:Name').txt('IGV').up()
+                        .ele('cbc:TaxTypeCode').txt('VAT').up()
+                    .up()
+                .up()
+            .up()
+        .up();
+
+        doc.ele('cac:LegalMonetaryTotal')
+            .ele('cbc:TaxExclusiveAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+            .ele('cbc:PayableAmount', { currencyID: data.currency || 'PEN' }).txt(total.toFixed(2)).up()
+        .up();
+
+        // Línea de detalle
+        doc.ele('cac:CreditNoteLine')
+            .ele('cbc:ID').txt('1').up()
+            .ele('cbc:CreditedQuantity', { unitCode: 'NIU' }).txt('1').up()
+            .ele('cbc:LineExtensionAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+            .ele('cac:PricingReference')
+                .ele('cac:AlternativeConditionPrice')
+                    .ele('cbc:PriceAmount', { currencyID: data.currency || 'PEN' }).txt(total.toFixed(2)).up()
+                    .ele('cbc:PriceTypeCode').txt('01').up()
+                .up()
+            .up()
+            .ele('cac:TaxTotal')
+                .ele('cbc:TaxAmount', { currencyID: data.currency || 'PEN' }).txt(igv.toFixed(2)).up()
+                .ele('cac:TaxSubtotal')
+                    .ele('cbc:TaxableAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+                    .ele('cbc:TaxAmount', { currencyID: data.currency || 'PEN' }).txt(igv.toFixed(2)).up()
+                    .ele('cac:TaxCategory')
+                        .ele('cbc:Percent').txt('18.00').up()
+                        .ele('cbc:TaxExemptionReasonCode').txt('10').up()
+                        .ele('cac:TaxScheme')
+                            .ele('cbc:ID').txt('1000').up()
+                            .ele('cbc:Name').txt('IGV').up()
+                            .ele('cbc:TaxTypeCode').txt('VAT').up()
+                        .up()
+                    .up()
+                .up()
+            .up()
+            .ele('cac:Item')
+                .ele('cbc:Description').txt(data.items?.[0]?.description || 'Nota de Crédito').up()
+            .up()
+            .ele('cac:Price')
+                .ele('cbc:PriceAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+            .up()
+        .up();
+
+        return doc.end({ prettyPrint: false });
+    }
+
+    /**
+     * Genera el XML UBL 2.1 para una Nota de Débito
+     */
+    buildDebitNoteXml(data) {
+        const doc = create({ version: '1.0', encoding: 'UTF-8', standalone: 'no' })
+            .ele('DebitNote', {
+                'xmlns': 'urn:oasis:names:specification:ubl:schema:xsd:DebitNote-2',
+                'xmlns:cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
+                'xmlns:cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
+                'xmlns:ds': 'http://www.w3.org/2000/09/xmldsig#',
+                'xmlns:ext': 'urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2'
+            })
+            .com(`Generado por FinanzaFacil Motor Directo v5.2 - ${new Date().toLocaleString()}`);
+
+        doc.ele('ext:UBLExtensions')
+            .ele('ext:UBLExtension')
+                .ele('ext:ExtensionContent')
+                .up()
+            .up()
+        .up();
+
+        doc.ele('cbc:UBLVersionID').txt('2.1').up()
+           .ele('cbc:CustomizationID').txt('2.0').up()
+           .ele('cbc:ID').txt(data.id).up()
+           .ele('cbc:IssueDate').txt(data.issueDate).up()
+           .ele('cbc:IssueTime').txt(data.issueTime || '00:00:00').up()
+           .ele('cbc:DocumentCurrencyCode').txt(data.currency || 'PEN').up();
+
+        // BillingReference
+        doc.ele('cac:BillingReference')
+            .ele('cac:InvoiceDocumentReference')
+                .ele('cbc:ID').txt(data.originalDocId).up()
+                .ele('cbc:IssueDate').txt(data.originalDocDate).up()
+            .up()
+        .up();
+
+        if (data.reasonCode) {
+            doc.ele('cbc:Note').txt(data.reasonDescription || '').up();
+            doc.ele('cbc:DebitNoteTypeCode').txt(data.reasonCode).up();
+        }
+
+        // Signature
+        doc.ele('cac:Signature')
+                .ele('cbc:ID').txt(this.config.ruc).up()
+                .ele('cac:SignatoryParty')
+                    .ele('cac:PartyIdentification')
+                        .ele('cbc:ID').txt(this.config.ruc).up()
+                    .up()
+                    .ele('cac:PartyName')
+                        .ele('cbc:Name').txt(data.emitterName).up()
+                    .up()
+                .up()
+                .ele('cac:DigitalSignatureAttachment')
+                    .ele('cac:ExternalReference')
+                        .ele('cbc:URI').txt('#SignatureSUNAT').up()
+                    .up()
+                .up()
+            .up();
+
+        doc.ele('cac:AccountingSupplierParty')
+                .ele('cac:Party')
+                    .ele('cac:PartyIdentification')
+                        .ele('cbc:ID', { schemeID: '6' }).txt(this.config.ruc).up()
+                    .up()
+                    .ele('cac:PartyLegalEntity')
+                        .ele('cbc:RegistrationName').txt(data.emitterName).up()
+                    .up()
+                .up()
+            .up();
+
+        doc.ele('cac:AccountingCustomerParty')
+                .ele('cac:Party')
+                    .ele('cac:PartyIdentification')
+                        .ele('cbc:ID', { schemeID: data.customerType }).txt(data.customerRuc).up()
+                    .up()
+                    .ele('cac:PartyLegalEntity')
+                        .ele('cbc:RegistrationName').txt(data.customerName).up()
+                    .up()
+                .up()
+            .up();
+
+        const total = parseFloat(data.total);
+        const gravada = total / 1.18;
+        const igv = total - gravada;
+
+        doc.ele('cac:TaxTotal')
+            .ele('cbc:TaxAmount', { currencyID: data.currency || 'PEN' }).txt(igv.toFixed(2)).up()
+            .ele('cac:TaxSubtotal')
+                .ele('cbc:TaxableAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+                .ele('cbc:TaxAmount', { currencyID: data.currency || 'PEN' }).txt(igv.toFixed(2)).up()
+                .ele('cac:TaxCategory')
+                    .ele('cac:TaxScheme')
+                        .ele('cbc:ID').txt('1000').up()
+                        .ele('cbc:Name').txt('IGV').up()
+                        .ele('cbc:TaxTypeCode').txt('VAT').up()
+                    .up()
+                .up()
+            .up()
+        .up();
+
+        doc.ele('cac:RequestedMonetaryTotal')
+            .ele('cbc:LineExtensionAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+            .ele('cbc:PayableAmount', { currencyID: data.currency || 'PEN' }).txt(total.toFixed(2)).up()
+        .up();
+
+        doc.ele('cac:DebitNoteLine')
+            .ele('cbc:ID').txt('1').up()
+            .ele('cbc:DebitedQuantity', { unitCode: 'NIU' }).txt('1').up()
+            .ele('cbc:LineExtensionAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+            .ele('cac:PricingReference')
+                .ele('cac:AlternativeConditionPrice')
+                    .ele('cbc:PriceAmount', { currencyID: data.currency || 'PEN' }).txt(total.toFixed(2)).up()
+                    .ele('cbc:PriceTypeCode').txt('01').up()
+                .up()
+            .up()
+            .ele('cac:TaxTotal')
+                .ele('cbc:TaxAmount', { currencyID: data.currency || 'PEN' }).txt(igv.toFixed(2)).up()
+                .ele('cac:TaxSubtotal')
+                    .ele('cbc:TaxableAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+                    .ele('cbc:TaxAmount', { currencyID: data.currency || 'PEN' }).txt(igv.toFixed(2)).up()
+                    .ele('cac:TaxCategory')
+                        .ele('cbc:Percent').txt('18.00').up()
+                        .ele('cbc:TaxExemptionReasonCode').txt('10').up()
+                        .ele('cac:TaxScheme')
+                            .ele('cbc:ID').txt('1000').up()
+                            .ele('cbc:Name').txt('IGV').up()
+                            .ele('cbc:TaxTypeCode').txt('VAT').up()
+                        .up()
+                    .up()
+                .up()
+            .up()
+            .ele('cac:Item')
+                .ele('cbc:Description').txt(data.items?.[0]?.description || 'Nota de Débito').up()
+            .up()
+            .ele('cac:Price')
+                .ele('cbc:PriceAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
+            .up()
+        .up();
+
+        return doc.end({ prettyPrint: false });
+    }
+
+    /**
      * Firma el XML con el certificado PFX (puede ser un path o un Buffer/Base64)
      */
-    async signXml(xmlString, certData, certPass) {
+    async signXml(xmlString, certData, certPass, rootElement = 'Invoice') {
         let pfxBuffer;
         if (Buffer.isBuffer(certData)) {
             pfxBuffer = certData;
@@ -207,7 +496,7 @@ class SunatEngine {
         };
 
         sig.addReference(
-            "//*[local-name(.)='Invoice']", 
+            `//*[local-name(.)='${rootElement}']`, 
             ["http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/2001/10/xml-exc-c14n#"], 
             "http://www.w3.org/2001/04/xmlenc#sha256",
             "", null, null, true
