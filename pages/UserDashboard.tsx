@@ -2,7 +2,10 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Expense, TaxDocument, PendingInvoice, UserRole, SubscriptionStatus, User as UserType } from '../types';
 import { Plus, Camera, Loader2, DollarSign, Search, Calendar, Tag, Image as ImageIcon, X, Clock, PieChart as PieChartIcon, BarChart as BarChartIcon, Upload, RefreshCw, Sparkles, Save, Hash, FileText, User, ShieldCheck, Lock, Eye, EyeOff, Download, ChevronDown, FileSpreadsheet, History, DownloadCloud, ExternalLink, PlusCircle, MessageCircleMore, Headphones, TrendingUp, TrendingDown, CalendarDays, CalendarRange, FileInput, ReceiptText, Printer, CheckCircle2, ArrowLeft, Globe, AlertTriangle, ExternalLink as ExtIcon, ShoppingBag, Briefcase, Users, HelpCircle, ChevronLeft, ChevronRight, Building, UserPlus, UserMinus, Trash2, Trash } from 'lucide-react';
-import { analyzeReceipt, fileToBase64 } from '../services/geminiService';
+import { analyzeReceiptOCR } from '../services/ocrService';
+import { fileToBase64 } from '../services/geminiService';
+import { analyzeImageQuality, QualityReport } from '../services/imageQuality';
+import { ImageQualityAlert } from '../components/ImageQualityAlert';
 import { sunatService } from '../services/sunatService';
 import { consultaService } from '../services/consultaService';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
@@ -19,6 +22,9 @@ export const UserDashboard: React.FC = () => {
 
   const [analyzing, setAnalyzing] = useState(false);
   const [aiError, setAiError] = useState('');
+  const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
+  const [ocrRawText, setOcrRawText] = useState('');
+  const pendingFileRef = useRef<{ base64: string; mime: string } | null>(null);
   const [docFilter, setDocFilter] = useState<'all' | 'rh' | 'factura' | 'nc' | 'nd' | 'pdt' | 'contador'>('all');
   const [previewDoc, setPreviewDoc] = useState<TaxDocument | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
@@ -393,15 +399,45 @@ export const UserDashboard: React.FC = () => {
       const base64 = await fileToBase64(file);
       setPreviewInternal(base64);
       setAiError('');
-      handleAnalyze(base64, file.type);
+      setQualityReport(null);
+
+      const report = await analyzeImageQuality(base64, file.type);
+      if (report.overallOk) {
+        handleAnalyze(base64, file.type);
+      } else {
+        pendingFileRef.current = { base64, mime: file.type };
+        setQualityReport(report);
+      }
     }
+  };
+
+  const handleRetryQuality = () => {
+    setQualityReport(null);
+    setPreviewInternal(null);
+    pendingFileRef.current = null;
+    setTimeout(() => fileInputRef.current?.click(), 100);
+  };
+
+  const handleContinueQuality = () => {
+    if (pendingFileRef.current) {
+      handleAnalyze(pendingFileRef.current.base64, pendingFileRef.current.mime);
+    }
+    setQualityReport(null);
+    pendingFileRef.current = null;
+  };
+
+  const handleDismissQuality = () => {
+    setQualityReport(null);
+    pendingFileRef.current = null;
   };
 
   const handleAnalyze = async (base64: string, mime: string) => {
     setAnalyzing(true);
     setAiError('');
+    setOcrRawText('');
     try {
-      const data = await analyzeReceipt(base64, mime);
+      const data = await analyzeReceiptOCR(base64, mime);
+      if (data.rawText) setOcrRawText(data.rawText);
       setAmount(data.total.toString());
       setDescription(data.merchant);
       setDate(data.date);
@@ -923,7 +959,7 @@ export const UserDashboard: React.FC = () => {
           
           <h3 className="text-lg font-black text-gray-800 uppercase tracking-tight mb-8 flex items-center">
              <div className="p-2 bg-brand-50 rounded-lg mr-3"><PlusCircle className="w-5 h-5 text-brand-600"/></div>
-             Registrar Gasto con IA
+              Registrar Gasto con OCR
           </h3>
 
           <form onSubmit={handleSubmitExpense} className="grid grid-cols-1 lg:grid-cols-2 gap-10">
@@ -954,6 +990,24 @@ export const UserDashboard: React.FC = () => {
                    </div>
                   )}
                 </div>
+
+                {ocrRawText && (
+                  <details className="bg-gray-50 border-2 border-gray-100 rounded-2xl overflow-hidden">
+                    <summary className="px-4 py-2.5 cursor-pointer text-[10px] font-black text-gray-500 uppercase tracking-widest hover:text-gray-700 select-none">
+                      Texto OCR extraído
+                    </summary>
+                    <pre className="px-4 pb-3 text-[10px] text-gray-600 font-mono whitespace-pre-wrap break-all max-h-40 overflow-y-auto leading-relaxed">{ocrRawText}</pre>
+                  </details>
+                )}
+
+                {qualityReport && (
+                  <ImageQualityAlert
+                    report={qualityReport}
+                    onRetry={handleRetryQuality}
+                    onContinue={handleContinueQuality}
+                    onDismiss={handleDismissQuality}
+                  />
+                )}
 
                 {aiError && (
                   <div className="p-4 bg-amber-50 border-2 border-amber-200 rounded-2xl flex items-center gap-3">
@@ -1009,7 +1063,7 @@ export const UserDashboard: React.FC = () => {
                   <div>
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">Monto (S/)</label>
                     <div className="relative">
-                      <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-600" />
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-black text-brand-600">S/</span>
                       <input 
                         type="number" 
                         step="0.01" 
