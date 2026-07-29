@@ -152,6 +152,122 @@ export const sunatService = {
       console.error('Error en APISUNAT:', error);
       return { success: false, error: 'Error de conexión con APISUNAT' };
     }
+  },
+
+  /**
+   * Emite una Nota de Crédito
+   */
+  emitirNotaCredito: async (
+    data: any,
+    token: string,
+    apiUrl: string = BASE_URL_LOCAL,
+    userCredentials?: any
+  ): Promise<SunatResponse> => {
+    try {
+      const isLocal = apiUrl && apiUrl.includes('localhost');
+      if (!isLocal) {
+        return { success: false, error: 'Notas de crédito/débito solo soportadas en motor local por ahora' };
+      }
+
+      const payload = {
+        noteType: 'nota_credito',
+        noteData: {
+          id: data.id,
+          issueDate: data.date,
+          currency: data.currency || 'PEN',
+          originalDocId: data.originalDocId,
+          originalDocDate: data.originalDocDate,
+          reasonCode: data.reasonCode,
+          reasonDescription: data.reasonDescription,
+          customerRuc: data.customerRuc,
+          customerName: data.customerName,
+          customerType: data.customerRuc?.length === 8 ? '1' : '6',
+          emitterName: userCredentials?.emitterName || 'MI EMPRESA S.A.C.',
+          total: data.total,
+          items: data.items || [{ description: data.reasonDescription || 'Nota de Crédito', quantity: 1, unitPrice: data.total }]
+        },
+        credentials: userCredentials
+      };
+
+      const response = await fetch(`${apiUrl}/emitir-nota`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        return {
+          success: true,
+          sunatStatus: 'ACEPTADO',
+          xmlContent: result.xmlContent,
+          cdrBase64: result.cdrBase64
+        };
+      } else {
+        return { success: false, error: result.error };
+      }
+    } catch (error) {
+      console.error('Error emitting Nota de Crédito:', error);
+      return { success: false, error: 'Error de conexión con el servidor de SUNAT' };
+    }
+  },
+
+  /**
+   * Emite una Nota de Débito
+   */
+  emitirNotaDebito: async (
+    data: any,
+    token: string,
+    apiUrl: string = BASE_URL_LOCAL,
+    userCredentials?: any
+  ): Promise<SunatResponse> => {
+    try {
+      const isLocal = apiUrl && apiUrl.includes('localhost');
+      if (!isLocal) {
+        return { success: false, error: 'Notas de crédito/débito solo soportadas en motor local por ahora' };
+      }
+
+      const payload = {
+        noteType: 'nota_debito',
+        noteData: {
+          id: data.id,
+          issueDate: data.date,
+          currency: data.currency || 'PEN',
+          originalDocId: data.originalDocId,
+          originalDocDate: data.originalDocDate,
+          reasonCode: data.reasonCode,
+          reasonDescription: data.reasonDescription,
+          customerRuc: data.customerRuc,
+          customerName: data.customerName,
+          customerType: data.customerRuc?.length === 8 ? '1' : '6',
+          emitterName: userCredentials?.emitterName || 'MI EMPRESA S.A.C.',
+          total: data.total,
+          items: data.items || [{ description: data.reasonDescription || 'Nota de Débito', quantity: 1, unitPrice: data.total }]
+        },
+        credentials: userCredentials
+      };
+
+      const response = await fetch(`${apiUrl}/emitir-nota`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        return {
+          success: true,
+          sunatStatus: 'ACEPTADO',
+          xmlContent: result.xmlContent,
+          cdrBase64: result.cdrBase64
+        };
+      } else {
+        return { success: false, error: result.error };
+      }
+    } catch (error) {
+      console.error('Error emitting Nota de Débito:', error);
+      return { success: false, error: 'Error de conexión con el servidor de SUNAT' };
+    }
   }
 };
 

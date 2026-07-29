@@ -9,17 +9,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "recharts": "2.12.7",
-    "lucide-react": "0.463.0",
     "@google/genai": "1.33.0",
     "adm-zip": "^0.5.17",
     "axios": "^1.15.2",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "lucide-react": "0.463.0",
     "node-forge": "^1.4.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "recharts": "2.12.7",
+    "tesseract.js": "^7.0.0",
     "xml-crypto": "^3.2.0",
     "xmlbuilder2": "^4.0.3"
   },

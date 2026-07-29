@@ -1,11 +1,11 @@
 import React, { useState, useRef } from 'react';
 import { useStore } from '../context/StoreContext';
-import { SubscriptionStatus } from '../types';
+import { SubscriptionStatus, UserRole } from '../types';
 import { Check, Smartphone, CheckCircle, QrCode, Calendar, Clock, Upload, X, AlertCircle } from 'lucide-react';
 import { fileToBase64, compressImageFile } from '../services/geminiService';
 
 export const Payment: React.FC = () => {
-  const { packages, paymentMethods, currentUser, updateUser, addNotification, addSubscriptionRecord } = useStore();
+  const { packages, accountantPackages, paymentMethods, currentUser, updateUser, addNotification, addSubscriptionRecord } = useStore();
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -15,6 +15,9 @@ export const Payment: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!currentUser) return null;
+
+  const isAccountant = currentUser.role === UserRole.ACCOUNTANT;
+  const availablePackages = isAccountant ? accountantPackages : packages;
 
   const handleVoucherUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -34,7 +37,7 @@ export const Payment: React.FC = () => {
   };
 
   const handlePayment = () => {
-    const pkg = packages.find(p => p.id === selectedPackage);
+    const pkg = availablePackages.find(p => p.id === selectedPackage);
     if (!pkg || !currentUser) return;
     if (!voucherImage) {
       setUploadError('Es obligatorio subir la foto del comprobante de pago.');
@@ -68,7 +71,7 @@ export const Payment: React.FC = () => {
 
     addNotification({
       id: Date.now().toString(),
-      message: `El usuario ${currentUser.name} ha realizado un pago por el ${pkg.name} (S/ ${pkg.price}). Pendiente de verificación por el administrador.`,
+      message: `El ${isAccountant ? 'contador' : 'usuario'} ${currentUser.name} ha realizado un pago por el ${pkg.name} (S/ ${pkg.price}). Pendiente de verificación por el administrador.`,
       date: new Date().toLocaleDateString('es-ES', { hour: '2-digit', minute: '2-digit' }),
       isRead: false,
       type: 'SUBSCRIPTION'
@@ -78,7 +81,7 @@ export const Payment: React.FC = () => {
   };
 
   if (showConfirm) {
-    const pkg = packages.find(p => p.id === selectedPackage);
+    const pkg = availablePackages.find(p => p.id === selectedPackage);
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full text-center space-y-4 border border-brand-100">
@@ -109,12 +112,12 @@ export const Payment: React.FC = () => {
       <div className="max-w-4xl mx-auto space-y-12">
         <div className="text-center">
           <h2 className="text-3xl font-extrabold text-gray-900">Elige tu Plan</h2>
-          <p className="mt-4 text-xl text-gray-500">Desbloquea todas las funciones de FinanzaFacil</p>
+          <p className="mt-4 text-xl text-gray-500">{isAccountant ? 'Activa tu cuenta de contador en FinanzaFacil' : 'Desbloquea todas las funciones de FinanzaFacil'}</p>
         </div>
 
         {/* Packages Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          {packages.map(pkg => (
+          {availablePackages.map(pkg => (
             <div 
               key={pkg.id}
               onClick={() => setSelectedPackage(pkg.id)}

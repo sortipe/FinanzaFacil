@@ -68,6 +68,7 @@ export interface ReceiptData {
   invoiceNumber?: string;
   subtotal?: number;
   igv?: number;
+  rawText?: string;
 }
 
 export const analyzeReceipt = async (base64Image: string, mimeType: string): Promise<ReceiptData> => {

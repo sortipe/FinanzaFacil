@@ -62,6 +62,8 @@ export interface TaxDocument {
   periodYear: number;
   sunatStatus?: 'PENDING' | 'SENT' | 'REJECTED' | 'INTERNO';
   sunatHash?: string;
+  documentType?: 'factura' | 'boleta' | 'nota_credito' | 'nota_debito' | 'rh';
+  originalDocumentId?: string;
   // Origen del documento: 'ACCOUNTANT' (subido por el contador) | 'USER' (emitido/archivado por el usuario)
   uploadedBy?: 'ACCOUNTANT' | 'USER';
   pdfUrl?: string;
@@ -105,7 +107,8 @@ export interface PendingInvoice {
   companyId?: string;
   serie: string;
   correlative: number;
-  documentType: 'factura' | 'boleta';
+  documentType: 'factura' | 'boleta' | 'nota_credito' | 'nota_debito';
+  originalDocumentId?: string;
   payload: any;
   customerDocType: string;
   customerDocNumber: string;
@@ -117,6 +120,28 @@ export interface PendingInvoice {
   status: 'PENDIENTE' | 'ENVIANDO' | 'ACEPTADO' | 'RECHAZADO';
   lastError?: string;
 }
+
+export const NC_MOTIVOS: Record<string, string> = {
+  '01': 'Anulación de la operación',
+  '02': 'Anulación por error en el RUC',
+  '03': 'Corrección por error en la descripción',
+  '04': 'Descuento global',
+  '05': 'Descuento por ítem',
+  '06': 'Devolución total',
+  '07': 'Devolución por ítem',
+  '08': 'Bonificación',
+  '09': 'Disminución en el valor',
+  '10': 'Otros conceptos',
+  '13': 'Ajuste de operaciones de exportación',
+};
+
+export const ND_MOTIVOS: Record<string, string> = {
+  '01': 'Intereses por mora',
+  '02': 'Aumento del valor del bien o servicio',
+  '03': 'Penalidades / Otros conceptos al alza',
+};
+
+export type NcNdMotivo = keyof typeof NC_MOTIVOS;
 
 export interface Expense {
   id: string;
@@ -142,6 +167,7 @@ export interface SubscriptionPackage {
   price: number;
   durationMonths: number;
   features: string[];
+  type?: 'CLIENT' | 'ACCOUNTANT';
 }
 
 export interface PaymentMethod {
