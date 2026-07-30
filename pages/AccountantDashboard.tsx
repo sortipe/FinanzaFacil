@@ -32,7 +32,7 @@ export const AccountantDashboard: React.FC = () => {
   const [movFilterYear, setMovFilterYear] = useState(new Date().getFullYear());
 
   // Reporte Mensual state
-  const [repClientId, setRepClientId] = useState<string>('');
+  const [repCompanyId, setRepCompanyId] = useState<string>('');
   const [repMonth, setRepMonth] = useState(MONTHS[new Date().getMonth()]);
   const [repYear, setRepYear] = useState(new Date().getFullYear());
 
@@ -49,7 +49,7 @@ export const AccountantDashboard: React.FC = () => {
 
   // Document Upload State
   const [isUploadingDoc, setIsUploadingDoc] = useState(false);
-  const [uploadClientId, setUploadClientId] = useState('');
+  const [uploadCompanyId, setUploadCompanyId] = useState('');
   const [docName, setDocName] = useState('');
   const [selectedMonth, setSelectedMonth] = useState(MONTHS[new Date().getMonth()]);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -195,11 +195,16 @@ export const AccountantDashboard: React.FC = () => {
       reader.onload = () => {
         try {
           const base64 = (reader.result as string).split(',')[1];
-          const targetClientId = uploadClientId || selectedClientId || '';
+          const targetCompanyId = uploadCompanyId || (selectedClientId
+            ? myCompanies.find(c => c.ownerUserId === selectedClientId)?.id || ''
+            : '');
+          const company = myCompanies.find(c => c.id === targetCompanyId);
+          if (!company) { alert('Selecciona una empresa'); return; }
           const finalName = docName || file.name;
           const newDoc: TaxDocument = {
             id: Date.now().toString(),
-            userId: targetClientId,
+            userId: company.ownerUserId,
+            companyId: company.id,
             accountantId: currentUser.id,
             name: finalName,
             fileUrl: base64,
@@ -210,16 +215,14 @@ export const AccountantDashboard: React.FC = () => {
             uploadedBy: 'ACCOUNTANT'
           };
           addTaxDocument(newDoc);
-          if (targetClientId) {
-            addNotification({
-              id: `notif-${Date.now()}`,
-              userId: targetClientId,
-              message: `Tu contador te envió: ${finalName}`,
-              date: new Date().toLocaleString('es-ES'),
-              isRead: false,
-              type: 'ACCOUNTANT_DOC'
-            });
-          }
+          addNotification({
+            id: `notif-${Date.now()}`,
+            userId: company.ownerUserId,
+            message: `Tu contador te envió: ${finalName}`,
+            date: new Date().toLocaleString('es-ES'),
+            isRead: false,
+            type: 'ACCOUNTANT_DOC'
+          });
           setDocName('');
           setPreviewFile(null);
           setIsUploadingDoc(false);
@@ -360,19 +363,6 @@ export const AccountantDashboard: React.FC = () => {
           </button>
         )}
       </div>
-      {myCompanies.length > 1 && (
-        <div className="flex items-center gap-3">
-          <Building className="w-4 h-4 text-gray-400" />
-          <select
-            value={selectedCompanyId || ''}
-            onChange={e => selectCompany(e.target.value || null)}
-            className="bg-white border-2 border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-brand-600"
-          >
-            <option value="">Todas mis empresas</option>
-            {myCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-      )}
       <div className="relative max-w-md">
         <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
         <input type="text" placeholder="Buscar por nombre o RUC..." value={searchClient}
@@ -694,17 +684,15 @@ export const AccountantDashboard: React.FC = () => {
   };
 
   const renderReporte = () => {
-    const expensesByClient = repClientId
+    const expensesByClient = repCompanyId
       ? expenses.filter(e => {
-          if (e.userId !== repClientId || e.isPrivate) return false;
-          const matchingDoc = taxDocuments.find(d => d.id === e.invoiceNumber);
-          if (matchingDoc && matchingDoc.sunatStatus === 'INTERNO') return false;
+          if (e.companyId !== repCompanyId || e.isPrivate) return false;
           return e.date.startsWith(`${repYear}-${String(MONTHS.indexOf(repMonth) + 1).padStart(2, '0')}`);
         })
       : [];
 
-    const incomeDocs = repClientId
-      ? taxDocuments.filter(d => d.userId === repClientId && d.sunatStatus !== 'INTERNO' &&
+    const incomeDocs = repCompanyId
+      ? taxDocuments.filter(d => d.companyId === repCompanyId && d.sunatStatus !== 'INTERNO' &&
           d.uploadDate?.startsWith(`${repYear}-${String(MONTHS.indexOf(repMonth) + 1).padStart(2, '0')}`))
       : [];
 
@@ -721,11 +709,11 @@ export const AccountantDashboard: React.FC = () => {
         <h2 className="text-2xl font-black text-gray-800">Reporte Mensual</h2>
         <div className="flex flex-wrap gap-3 items-end">
           <div>
-            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Cliente</label>
+            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Empresa</label>
             <select className="bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none min-w-[200px]"
-              value={repClientId} onChange={e => setRepClientId(e.target.value)}>
-              <option value="">Seleccionar cliente</option>
-              {myClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              value={repCompanyId} onChange={e => setRepCompanyId(e.target.value)}>
+              <option value="">Seleccionar empresa</option>
+              {myCompanies.map(c => <option key={c.id} value={c.id}>{c.name}{c.ruc ? ` (${c.ruc})` : ''}</option>)}
             </select>
           </div>
           <div>
@@ -744,10 +732,10 @@ export const AccountantDashboard: React.FC = () => {
           </div>
         </div>
 
-        {!repClientId ? (
+        {!repCompanyId ? (
           <div className="py-20 text-center text-gray-400">
             <BarChart3 className="w-16 h-16 mx-auto mb-4 opacity-30" />
-            <p className="font-black uppercase text-sm">Selecciona un cliente</p>
+            <p className="font-black uppercase text-sm">Selecciona una empresa</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -797,13 +785,13 @@ export const AccountantDashboard: React.FC = () => {
             {/* Botones de exportación */}
             <div className="lg:col-span-2 flex gap-3">
               <button onClick={() => downloadPdfReport(
-                myClients.find(c => c.id === repClientId)?.name || '',
+                myCompanies.find(c => c.id === repCompanyId)?.name || '',
                 repMonth, repYear, expensesByClient, totalGastos
               )}
                 className="flex-1 py-3 bg-brand-600 text-white rounded-xl font-black text-xs uppercase hover:bg-brand-700 transition flex items-center justify-center shadow-lg">
                 <Printer className="w-4 h-4 mr-2" /> Reporte PDF
               </button>
-              <button onClick={() => exportToExcel(myClients.find(c => c.id === repClientId)?.name || '', expensesByClient)}
+              <button onClick={() => exportToExcel(myCompanies.find(c => c.id === repCompanyId)?.name || '', expensesByClient)}
                 className="flex-1 py-3 bg-green-600 text-white rounded-xl font-black text-xs uppercase hover:bg-green-700 transition flex items-center justify-center shadow-lg">
                 <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
               </button>
@@ -996,27 +984,30 @@ export const AccountantDashboard: React.FC = () => {
 
   // ─── View: Subir Archivo ───
   const renderSubirArchivo = () => {
-    const targetClientId = uploadClientId || selectedClientId;
-    const client = users.find(u => u.id === targetClientId);
+    const selectedCompanyFromClient = selectedClientId
+      ? myCompanies.find(c => c.ownerUserId === selectedClientId)?.id || ''
+      : '';
+    const targetCompanyId = uploadCompanyId || selectedCompanyFromClient;
+    const targetCompany = myCompanies.find(c => c.id === targetCompanyId);
 
     return (
       <div className="max-w-2xl mx-auto space-y-6">
         <h2 className="text-2xl font-black text-gray-800">Subir Documento Tributario</h2>
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 space-y-6">
-          {!targetClientId && (
+          {!selectedCompanyFromClient && (
             <div>
-              <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Cliente</label>
+              <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Empresa</label>
               <select className="w-full bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-brand-600"
-                value={uploadClientId} onChange={e => setUploadClientId(e.target.value)}>
-                <option value="">Seleccionar cliente</option>
-                {myClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                value={uploadCompanyId} onChange={e => setUploadCompanyId(e.target.value)}>
+                <option value="">Seleccionar empresa</option>
+                {myCompanies.map(c => <option key={c.id} value={c.id}>{c.name}{c.ruc ? ` (${c.ruc})` : ''}</option>)}
               </select>
             </div>
           )}
-          {client && (
+          {targetCompany && (
             <div className="p-3 bg-brand-50 rounded-xl flex items-center gap-3">
-              <UserIcon className="w-5 h-5 text-brand-600" />
-              <span className="text-sm font-black text-brand-800 uppercase">{client.name}</span>
+              <Building className="w-5 h-5 text-brand-600" />
+              <span className="text-sm font-black text-brand-800 uppercase">{targetCompany.name}</span>
             </div>
           )}
           <div>
@@ -1062,11 +1053,11 @@ export const AccountantDashboard: React.FC = () => {
               accept=".pdf,.xml,.jpg,.jpeg,.png" onChange={handleFileSelect} />
           </div>
           <button onClick={() => {
-            if (!targetClientId) return alert('Selecciona un cliente');
+            if (!targetCompanyId) return alert('Selecciona una empresa');
             if (!docInputRef.current?.files?.length) return alert('Selecciona un archivo');
             setIsUploadingDoc(true);
             handleDocUpload({ target: { files: docInputRef.current.files } } as any);
-          }} disabled={!targetClientId || isUploadingDoc}
+          }} disabled={!targetCompanyId || isUploadingDoc}
             className="w-full py-4 bg-brand-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-brand-700 transition flex items-center justify-center disabled:opacity-50 shadow-lg">
             {isUploadingDoc ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Subiendo...</> : <><Upload className="w-4 h-4 mr-2" /> Subir Documento</>}
           </button>

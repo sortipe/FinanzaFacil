@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { UserRole, SubscriptionStatus } from '../types';
-import { CheckCircle2, AlertCircle, Lock, KeyRound, ArrowRight, ShieldCheck, Database, RefreshCw, X, Loader2, Eye, EyeOff } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Lock, KeyRound, ArrowRight, ShieldCheck, X, Eye, EyeOff } from 'lucide-react';
 
 export const Auth: React.FC = () => {
   const { currentUser, login, registerUser, changePassword, logout } = useStore();
@@ -26,11 +26,6 @@ export const Auth: React.FC = () => {
   const [authError, setAuthError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // DB Validator states
-  const [showDbStatusModal, setShowDbStatusModal] = useState(false);
-  const [dbStatusData, setDbStatusData] = useState<any>(null);
-  const [testingDb, setTestingDb] = useState(false);
-
   // Password visibility toggles
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
@@ -38,23 +33,6 @@ export const Auth: React.FC = () => {
   const [showCurrentPwd, setShowCurrentPwd] = useState(false);
   const [showNewPwd, setShowNewPwd] = useState(false);
   const [showConfirmNewPwd, setShowConfirmNewPwd] = useState(false);
-
-  const checkDbConnection = async () => {
-    setTestingDb(true);
-    try {
-      const res = await fetch('/api/db-status');
-      const data = await res.json();
-      setDbStatusData(data);
-    } catch (err: any) {
-      setDbStatusData({
-        status: 'error',
-        message: err.message || 'Sin respuesta del servidor backend',
-        timestamp: new Date().toISOString()
-      });
-    } finally {
-      setTestingDb(false);
-    }
-  };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -339,112 +317,7 @@ export const Auth: React.FC = () => {
           </button>
         </div>
 
-        <div className="mt-8 pt-4 border-t border-gray-100 text-center">
-          <button
-            type="button"
-            onClick={() => {
-              setShowDbStatusModal(true);
-              checkDbConnection();
-            }}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-600 rounded-xl text-[10px] font-black uppercase tracking-wider transition shadow-sm"
-          >
-            <Database className="w-3.5 h-3.5 text-brand-600" />
-            Verificar Estado de Base de Datos
-          </button>
         </div>
       </div>
-
-      {/* MODAL VALIDADOR DE CONEXIÓN A BASE DE DATOS */}
-      {showDbStatusModal && (
-        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 p-4 overflow-y-auto">
-          <div className="bg-white rounded-[2rem] w-full max-w-md overflow-hidden shadow-2xl animate-fade-in-up relative">
-            <div className="p-6 bg-gray-900 text-white flex justify-between items-center">
-              <div className="flex items-center space-x-3">
-                <Database className="w-6 h-6 text-brand-400" />
-                <div>
-                  <h3 className="text-sm font-black uppercase tracking-wide">Estado de Base de Datos</h3>
-                  <p className="text-[10px] text-gray-400 font-bold uppercase">Validador público de conexión MySQL</p>
-                </div>
-              </div>
-              <button onClick={() => setShowDbStatusModal(false)} className="text-gray-400 hover:text-white transition">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-5">
-              {testingDb ? (
-                <div className="py-8 flex flex-col items-center justify-center space-y-3">
-                  <Loader2 className="w-8 h-8 text-brand-600 animate-spin" />
-                  <p className="text-xs font-black text-gray-600 uppercase tracking-widest">Probando conexión a MySQL...</p>
-                </div>
-              ) : dbStatusData ? (
-                <div className="space-y-4">
-                  <div className={`p-4 rounded-2xl border-2 flex items-center gap-3 ${
-                    dbStatusData.status === 'connected'
-                      ? 'bg-green-50 border-green-200 text-green-800'
-                      : 'bg-red-50 border-red-200 text-red-800'
-                  }`}>
-                    <div className={`w-3 h-3 rounded-full shrink-0 ${
-                      dbStatusData.status === 'connected' ? 'bg-green-500 animate-ping' : 'bg-red-500'
-                    }`} />
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-wide">
-                        {dbStatusData.status === 'connected' ? 'Conexión Exitosa' : 'Error de Conexión'}
-                      </p>
-                      <p className="text-[10px] font-bold opacity-80">
-                        {dbStatusData.status === 'connected' ? 'Base de datos respondiendo en tiempo real.' : dbStatusData.message}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 space-y-2.5 text-xs font-bold text-gray-700">
-                    <div className="flex justify-between items-center border-b border-gray-200/60 pb-2">
-                      <span className="text-[10px] font-black uppercase text-gray-400">Servidor (Host)</span>
-                      <span className="font-mono font-black text-gray-900">{dbStatusData.host || '127.0.0.1'}</span>
-                    </div>
-                    <div className="flex justify-between items-center border-b border-gray-200/60 pb-2">
-                      <span className="text-[10px] font-black uppercase text-gray-400">Puerto</span>
-                      <span className="font-mono font-black text-gray-900">{dbStatusData.port || '3306'}</span>
-                    </div>
-                    <div className="flex justify-between items-center border-b border-gray-200/60 pb-2">
-                      <span className="text-[10px] font-black uppercase text-gray-400">Base de Datos</span>
-                      <span className="font-black text-brand-700 uppercase">{dbStatusData.database || 'finanzafacil'}</span>
-                    </div>
-                    {dbStatusData.responseTimeMs !== undefined && (
-                      <div className="flex justify-between items-center border-b border-gray-200/60 pb-2">
-                        <span className="text-[10px] font-black uppercase text-gray-400">Latencia / Tiempo</span>
-                        <span className="font-mono font-black text-green-600">{dbStatusData.responseTimeMs} ms</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between items-center pt-1 text-[9px] text-gray-400">
-                      <span>Última comprobación</span>
-                      <span className="font-mono">{new Date(dbStatusData.timestamp).toLocaleTimeString('es-ES')}</span>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="pt-2 flex gap-3">
-                <button
-                  type="button"
-                  onClick={checkDbConnection}
-                  disabled={testingDb}
-                  className="flex-1 py-3 bg-brand-600 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-brand-700 transition shadow-md flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-4 h-4 ${testingDb ? 'animate-spin' : ''}`} /> Probar Conexión Nuevamente
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowDbStatusModal(false)}
-                  className="px-5 py-3 border border-gray-200 text-gray-600 rounded-xl text-xs font-black uppercase hover:bg-gray-100 transition"
-                >
-                  Cerrar
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
   );
 };

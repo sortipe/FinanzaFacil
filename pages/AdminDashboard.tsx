@@ -32,17 +32,9 @@ export const AdminDashboard: React.FC = () => {
     updateSunatGlobalConfig,
     complaints,
     updateComplaintStatus,
-    generatePassword,
-    refreshData
+    generatePassword
   } = useStore();
 
-  useEffect(() => {
-    refreshData();
-    const interval = setInterval(() => {
-      refreshData();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, []);
 
   const [activeTab, setActiveTab] = useState<'users' | 'subscriptions' | 'settings' | 'complaints' | 'companies'>('users');
   const [subFilter, setSubFilter] = useState<'all' | SubscriptionStatus>('all');
@@ -298,14 +290,6 @@ export const AdminDashboard: React.FC = () => {
            <p className="text-gray-500 text-sm font-bold">Gestión global de la plataforma</p>
         </div>
 
-        <div className="flex items-center space-x-3">
-          <button
-             onClick={refreshData}
-             className="px-4 py-3 bg-white border-2 border-gray-100 rounded-2xl hover:bg-gray-50 hover:scale-105 active:scale-95 transition shadow-sm text-xs font-black uppercase tracking-wider text-gray-600 flex items-center gap-1.5"
-             title="Actualizar datos del servidor"
-          >
-             <Loader2 className="w-4 h-4 text-brand-600 animate-spin-slow" /> Refrescar
-          </button>
           <div className="relative">
             <button 
                onClick={() => setShowNotifications(!showNotifications)}
@@ -337,15 +321,8 @@ export const AdminDashboard: React.FC = () => {
                    )) : <p className="p-8 text-center text-xs text-gray-400 italic">Todo al día</p>}
                 </div>
               </div>
-                   )}
-                   {!editingUser && (
-                     <div className="sm:col-span-2">
-                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Contraseña Generada</label>
-                       <input type="password" readOnly value={generatedPassword} className="w-full border-2 border-gray-200 p-3.5 rounded-2xl text-sm font-mono text-gray-500 bg-gray-50 cursor-not-allowed outline-none" placeholder="Se generará automáticamente" />
-                     </div>
-                   )}
-               </div>
-        </div>
+                    )}
+                </div>
       </header>
 
       {/* TABS CON DISEÑO MEJORADO */}
