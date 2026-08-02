@@ -54,7 +54,12 @@ export const sunatService = {
   ): Promise<SunatResponse> => {
     // Los RH usualmente requieren portal SOL directo o APIs específicas.
     // Por ahora redirigimos al flujo local si se desea.
-    return sunatService.emitirFactura(data, token, apiUrl, userCredentials, 'E001', 'PEN');
+    const payload = {
+      ...data,
+      items: data.items || [{ description: data.description || 'Servicios profesionales', quantity: 1, unitPrice: parseFloat(data.amount) || 0 }],
+      total: data.total ?? data.amount
+    };
+    return sunatService.emitirFactura(payload, token, apiUrl, userCredentials, 'E001', 'PEN');
   },
 
 
@@ -70,7 +75,7 @@ export const sunatService = {
     currency?: string
   ): Promise<SunatResponse> => {
     try {
-      const isLocal = apiUrl && apiUrl.includes('localhost');
+      const isLocal = !apiUrl || apiUrl.startsWith('/') || apiUrl.includes('localhost');
       
       if (isLocal) {
           const payload = {

@@ -74,7 +74,18 @@ app.post('/verificar-conexion', async (req, res) => {
         // Usamos un nombre de archivo aleatorio para evitar el error de "Documento igual en proceso"
         const testId = `TEST-${Math.floor(Math.random() * 1000000)}`;
         const response = await testEngine.sendToSunat(testId, '<Test>Sign</Test>', credentials);
-        
+
+        // Detectar Fault SOAP en la respuesta (HTTP 200 no implica credenciales válidas)
+        const isFault = response && (response.includes('<soap-env:Fault') || response.includes('<soap:Fault'));
+        if (isFault) {
+            const faultString = response.split('<faultstring>')[1]?.split('</faultstring>')[0] || 'SUNAT rechazó las credenciales';
+            return res.status(400).json({
+                success: false,
+                error: faultString,
+                sunatResponse: response
+            });
+        }
+
         res.json({
             success: true,
             message: 'Conexión exitosa con SUNAT'
@@ -242,11 +253,24 @@ app.post('/emitir-nota', async (req, res) => {
 
         // Serie for NC: FC01 (factura crédito) / BC01 (boleta crédito)
         // Serie for ND: FD01 (factura débito) / BD01 (boleta débito)
-        const fileName = `${noteData.id}`;
+        const tipoDoc = isCredit ? '07' : '08';
+        const fileName = `${currentConfig.ruc}-${tipoDoc}-${noteData.id}`;
+        console.log(`>>> ENVIANDO NOTA A SUNAT (${currentConfig.env}): ${fileName}`);
 
         // Send to SUNAT
         const response = await engine.sendToSunat(fileName, signedXml, currentConfig);
         const isAccepted = !response.includes('<soap-env:Fault') && !response.includes('<soap:Fault');
+
+        // Detectar Fault y extraer el faultstring real de SUNAT
+        const isFault = response && (response.includes('<soap-env:Fault') || response.includes('<soap:Fault'));
+        if (isFault) {
+            const faultString = response.split('<faultstring>')[1]?.split('</faultstring>')[0] || 'Error desconocido en SUNAT';
+            return res.status(400).json({
+                success: false,
+                error: faultString,
+                sunatResponse: response
+            });
+        }
 
         // Extract CDR
         const cdrMatch = response.match(/<applicationResponse>([\s\S]*?)<\/applicationResponse>/);

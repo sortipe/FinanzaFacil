@@ -53,18 +53,31 @@ export const UserDashboard: React.FC = () => {
   const [subUserCreated, setSubUserCreated] = useState(false);
   const mySubUsers = useMemo(() => users.filter(u => u.parentId === currentUser?.id), [users, currentUser]);
 
+  const MAX_RETRY_ATTEMPTS = 5;
+
   const retryPendingInvoice = async (inv: PendingInvoice) => {
+    if ((inv.attemptCount || 0) >= MAX_RETRY_ATTEMPTS) return;
     setRetrying(inv.id);
     updatePendingInvoiceStatus(inv.id, 'ENVIANDO');
     try {
       const isNCND = inv.documentType === 'nota_credito' || inv.documentType === 'nota_debito';
       const endpoint = isNCND ? '/emitir-nota' : '/emitir-factura';
+      const company = companies.find(c => c.id === inv.companyId) || selectedCompany;
+      const credentials = {
+        ruc: company?.ruc,
+        user: company?.solUser,
+        pass: company?.solPass,
+        certBase64: company?.certBase64,
+        certPass: company?.certPass,
+        env: company?.sunatEnv || 'PRODUCTION'
+      };
       const body = isNCND ? {
         noteType: inv.documentType,
         noteData: inv.payload,
-        credentials: inv.payload.credentials
+        credentials: inv.payload.credentials || credentials
       } : inv.payload;
       const response = await fetch(endpoint, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
@@ -114,7 +127,7 @@ export const UserDashboard: React.FC = () => {
   };
 
   const retryAllPending = async () => {
-    const pending = pendingInvoices.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE');
+    const pending = pendingInvoices.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE' && (p.attemptCount || 0) < MAX_RETRY_ATTEMPTS);
     for (const inv of pending) {
       await retryPendingInvoice(inv);
     }
@@ -219,7 +232,7 @@ export const UserDashboard: React.FC = () => {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      const pendings = pendingRef.current.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE' && p.attemptCount < 5);
+      const pendings = pendingRef.current.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE' && (p.attemptCount || 0) < MAX_RETRY_ATTEMPTS);
       if (pendings.length > 0) {
         pendings.forEach(inv => retryPendingInvoice(inv));
       }
@@ -482,13 +495,15 @@ export const UserDashboard: React.FC = () => {
 
   const handleOfficialSync = async () => {
     setSyncError('');
+    const activeApiUrl = selectedCompany?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '';
+    const useLocalEngine = !activeApiUrl || activeApiUrl.includes('localhost') || activeApiUrl.startsWith('/');
     const activeToken = selectedCompany?.sunatToken || sunatGlobalConfig.sunatToken;
     
     if (!selectedCompany?.solUser || !selectedCompany?.solPass) {
       setSyncError("Credenciales SOL (usuario y contraseña) no configuradas en la empresa seleccionada.");
       return;
     }
-    if (!activeToken) {
+    if (!useLocalEngine && !activeToken) {
       setSyncError("Token de Acceso APISUNAT no configurado. Obtén tu token en app.apisunat.pe.");
       return;
     }
@@ -500,7 +515,7 @@ export const UserDashboard: React.FC = () => {
       const response = await sunatService.emitirReciboHonorarios(
         receiptForm, 
         activeToken,
-        selectedCompany?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
+        useLocalEngine ? (activeApiUrl || 'http://localhost:5555') : activeApiUrl,
         {
           ruc: selectedCompany?.ruc,
           user: selectedCompany?.solUser,
@@ -816,12 +831,14 @@ export const UserDashboard: React.FC = () => {
             </div>
           )}
 
+          {!isSubUser && (
           <button 
             onClick={() => setActiveView(activeView === 'dashboard' ? 'settings' : 'dashboard')} 
             className={`p-3 rounded-2xl transition shadow-lg flex items-center justify-center active:scale-95 ${activeView === 'settings' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-100'}`}
           >
             <ShieldCheck className="w-5 h-5" />
           </button>
+          )}
           <button 
             onClick={() => setActiveView(activeView === 'history' ? 'dashboard' : 'history')} 
             className={`p-3 rounded-2xl transition shadow-lg flex items-center justify-center active:scale-95 ${activeView === 'history' ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 border border-gray-100'}`}
@@ -913,7 +930,7 @@ export const UserDashboard: React.FC = () => {
              </div>
            )}
 
-           <SunatSettings />
+            {!isSubUser && <SunatSettings />}
         </div>
       ) : activeView === 'history' ? (
         <div className="animate-fade-in-up">

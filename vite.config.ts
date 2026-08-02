@@ -17,6 +17,7 @@ export default defineConfig(({ mode }) => {
           '/consultar-dni': { target: 'http://localhost:5555', changeOrigin: true },
           '/consultar-ruc': { target: 'http://localhost:5555', changeOrigin: true },
           '/emitir-factura': { target: 'http://localhost:5555', changeOrigin: true },
+          '/emitir-nota': { target: 'http://localhost:5555', changeOrigin: true },
           '/consultar-cpe': { target: 'http://localhost:5555', changeOrigin: true },
           '/verificar-conexion': { target: 'http://localhost:5555', changeOrigin: true },
           '/analizar-recibo': { target: 'http://localhost:5555', changeOrigin: true },
