@@ -53,18 +53,31 @@ export const UserDashboard: React.FC = () => {
   const [subUserCreated, setSubUserCreated] = useState(false);
   const mySubUsers = useMemo(() => users.filter(u => u.parentId === currentUser?.id), [users, currentUser]);
 
+  const MAX_RETRY_ATTEMPTS = 5;
+
   const retryPendingInvoice = async (inv: PendingInvoice) => {
+    if ((inv.attemptCount || 0) >= MAX_RETRY_ATTEMPTS) return;
     setRetrying(inv.id);
     updatePendingInvoiceStatus(inv.id, 'ENVIANDO');
     try {
       const isNCND = inv.documentType === 'nota_credito' || inv.documentType === 'nota_debito';
       const endpoint = isNCND ? '/emitir-nota' : '/emitir-factura';
+      const company = companies.find(c => c.id === inv.companyId) || selectedCompany;
+      const credentials = {
+        ruc: company?.ruc,
+        user: company?.solUser,
+        pass: company?.solPass,
+        certBase64: company?.certBase64,
+        certPass: company?.certPass,
+        env: company?.sunatEnv || 'PRODUCTION'
+      };
       const body = isNCND ? {
         noteType: inv.documentType,
         noteData: inv.payload,
-        credentials: inv.payload.credentials
+        credentials: inv.payload.credentials || credentials
       } : inv.payload;
       const response = await fetch(endpoint, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
@@ -114,7 +127,7 @@ export const UserDashboard: React.FC = () => {
   };
 
   const retryAllPending = async () => {
-    const pending = pendingInvoices.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE');
+    const pending = pendingInvoices.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE' && (p.attemptCount || 0) < MAX_RETRY_ATTEMPTS);
     for (const inv of pending) {
       await retryPendingInvoice(inv);
     }
@@ -219,7 +232,7 @@ export const UserDashboard: React.FC = () => {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      const pendings = pendingRef.current.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE' && p.attemptCount < 5);
+      const pendings = pendingRef.current.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE' && (p.attemptCount || 0) < MAX_RETRY_ATTEMPTS);
       if (pendings.length > 0) {
         pendings.forEach(inv => retryPendingInvoice(inv));
       }
@@ -482,13 +495,19 @@ export const UserDashboard: React.FC = () => {
 
   const handleOfficialSync = async () => {
     setSyncError('');
+    const activeApiUrl = selectedCompany?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '';
+    const useLocalEngine = !activeApiUrl || activeApiUrl.includes('localhost') || activeApiUrl.startsWith('/');
     const activeToken = selectedCompany?.sunatToken || sunatGlobalConfig.sunatToken;
     
-    if (!selectedCompany?.solUser || !selectedCompany?.solPass) {
-      setSyncError("Credenciales SOL (usuario y contraseña) no configuradas en la empresa seleccionada.");
+    // RH: el emisor es el empleado (RUC personal + credenciales SOL propias)
+    const solUser = currentUser?.solUser || '';
+    const solPass = currentUser?.solPass || '';
+    const rucEmisor = currentUser?.ruc || '';
+    if (!rucEmisor || !solUser || !solPass) {
+      setSyncError("Credenciales SOL del empleado (RUC, usuario y contraseña) no configuradas. Configúralas en tu perfil para emitir Recibos por Honorarios.");
       return;
     }
-    if (!activeToken) {
+    if (!useLocalEngine && !activeToken) {
       setSyncError("Token de Acceso APISUNAT no configurado. Obtén tu token en app.apisunat.pe.");
       return;
     }
@@ -497,20 +516,45 @@ export const UserDashboard: React.FC = () => {
     setSunatStatusMsg('Iniciando comunicación con SUNAT...');
     
     try {
-      const response = await sunatService.emitirReciboHonorarios(
-        receiptForm, 
-        activeToken,
-        selectedCompany?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || '',
-        {
-          ruc: selectedCompany?.ruc,
-          user: selectedCompany?.solUser,
-          pass: selectedCompany?.solPass,
-          certBase64: selectedCompany?.certBase64,
-          certPass: selectedCompany?.certPass,
-          emitterName: selectedCompany?.businessName,
-          env: selectedCompany?.sunatEnv || 'PRODUCTION'
-        }
-      );
+      let response;
+      if (useLocalEngine) {
+        // Motor local: usa scraper Playwright del Portal Web SOL
+        const scraperPayload = {
+          ruc: rucEmisor,
+          solUser,
+          solPass,
+          docType: receiptForm.recipientRuc?.length === 8 ? 'DNI' : 'RUC',
+          docNumber: receiptForm.recipientRuc,
+          nameOrRazon: receiptForm.recipientName,
+          concepto: receiptForm.description,
+          moneda: 'SOLES',
+          montoNeto: receiptForm.amount,
+          retencion: receiptForm.applyRetention ? 'si' : 'no',
+          tipoRenta: '4',
+          headless: false,
+          stopBeforeEmit: true,
+        };
+        response = await sunatService.emitirReciboHonorariosScraper(
+          scraperPayload,
+          (activeApiUrl || 'http://localhost:5555')
+        );
+      } else {
+        // API externa (APISUNAT)
+        response = await sunatService.emitirReciboHonorarios(
+          receiptForm,
+          activeToken,
+          activeApiUrl,
+          {
+            ruc: selectedCompany?.ruc,
+            user: selectedCompany?.solUser,
+            pass: selectedCompany?.solPass,
+            certBase64: selectedCompany?.certBase64,
+            certPass: selectedCompany?.certPass,
+            emitterName: selectedCompany?.businessName,
+            env: selectedCompany?.sunatEnv || 'PRODUCTION'
+          }
+        );
+      }
 
       
       if (response.success) {
@@ -734,102 +778,112 @@ export const UserDashboard: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">Hola, {currentUser.name}</h2>
-          <p className="text-gray-500 text-sm font-medium tracking-tight">Gestiona tus finanzas personales y tributarias</p>
+      {/* HEADER PRINCIPAL - ESTILO WEB .DOCX (#0B192C / SLATE) */}
+      <header className="bg-[#0B192C] text-white p-6 md:p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+        <div className="absolute -top-16 -left-16 w-64 h-64 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div className="absolute -bottom-16 -right-16 w-64 h-64 bg-blue-600/20 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div className="relative z-10 space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="px-2.5 py-0.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-black rounded-full uppercase tracking-widest">Empresa Activa</span>
+            {isSubUser && <span className="px-2.5 py-0.5 bg-blue-500/20 text-blue-300 text-[10px] font-black rounded-full uppercase">Solo Lectura</span>}
+          </div>
+          <h2 className="text-2xl md:text-3xl font-black tracking-tight text-white">Hola, {currentUser.name}</h2>
+          <p className="text-xs text-slate-300 font-medium">Gestiona tus finanzas empresariales y tributarias con SUNAT.</p>
+          
+          {companies.length > 0 && (
+            <div className="flex items-center gap-2 pt-2">
+              <Briefcase className="w-4 h-4 text-amber-400" />
+              <select
+                value={selectedCompanyId || ''}
+                onChange={(e) => selectCompany(e.target.value || null)}
+                className="bg-white/10 backdrop-blur-md border border-white/20 px-3 py-1.5 rounded-xl text-xs font-black text-white outline-none focus:border-amber-400 transition"
+              >
+                {companies.map(c => (
+                  <option key={c.id} value={c.id} className="bg-slate-900 text-white">{c.name}{c.ruc ? ` (${c.ruc})` : ''}</option>
+                ))}
+              </select>
+              <button onClick={() => setShowCreateCompany(true)} className="p-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded-xl transition border border-amber-500/30" title="Nueva empresa">
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+          {companies.length === 0 && (
+            <button onClick={() => setShowCreateCompany(true)} className="mt-2 bg-amber-500 hover:bg-amber-600 text-slate-950 px-5 py-2.5 rounded-xl transition flex items-center font-black text-xs uppercase tracking-widest shadow-lg shadow-amber-500/20 active:scale-95">
+              <Building className="w-4 h-4 mr-2" /> Crear Mi Empresa
+            </button>
+          )}
         </div>
 
-        {companies.length > 0 && (
-          <div className="flex items-center gap-2">
-            <Briefcase className="w-4 h-4 text-gray-400" />
-            <select
-              value={selectedCompanyId || ''}
-              onChange={(e) => selectCompany(e.target.value || null)}
-              className="bg-white border-2 border-gray-200 px-3 py-2 rounded-xl text-sm font-bold outline-none focus:border-brand-500 transition"
-            >
-              {companies.map(c => (
-                <option key={c.id} value={c.id}>{c.name}{c.ruc ? ` (${c.ruc})` : ''}</option>
-              ))}
-            </select>
-            <button onClick={() => setShowCreateCompany(true)} className="p-2 bg-brand-50 text-brand-600 rounded-xl hover:bg-brand-100 transition" title="Nueva empresa">
-              <Plus className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-        {companies.length === 0 && (
-          <button onClick={() => setShowCreateCompany(true)} className="bg-brand-600 text-white px-5 py-3 rounded-2xl hover:bg-brand-700 transition flex items-center font-black text-xs uppercase tracking-widest shadow-xl active:scale-95">
-            <Building className="w-4 h-4 mr-2" /> Crear Mi Empresa
-          </button>
-        )}
-        
-        {selectedCompanyId && selectedCompany && (!selectedCompany.solUser || !selectedCompany.solPass) && (
-          <div className="flex-1 bg-amber-50 border-2 border-amber-200 p-4 rounded-2xl flex items-center animate-pulse">
-            <AlertTriangle className="w-5 h-5 text-amber-600 mr-3 shrink-0" />
-            <div>
-              <p className="text-xs font-black text-amber-900 uppercase tracking-tighter">Acceso SUNAT Pendiente</p>
-              <p className="text-[10px] text-amber-700 font-bold uppercase">Configura tu usuario y clave SOL en el perfil para emitir comprobantes.</p>
-            </div>
-          </div>
-        )}
-
-        <div className="flex flex-col lg:flex-row gap-4 w-full lg:w-auto items-center">
+        {/* BLOQUES DE ACCIÓN RÁPIDA (INGRESOS & EGRESOS) */}
+        <div className="relative z-10 flex flex-col sm:flex-row flex-wrap gap-3 w-full lg:w-auto items-stretch sm:items-center">
           {!isSubUser && (
             <>
               {/* Bloque Ingresos */}
-              <div className="flex items-center gap-2 bg-white/60 backdrop-blur-md p-1.5 rounded-[2rem] border border-gray-100 shadow-sm w-full lg:w-auto">
-                 <div className="px-4 py-2 rounded-2xl bg-brand-50 text-brand-700 font-black text-[10px] uppercase tracking-widest flex items-center">
-                    <TrendingUp className="w-4 h-4 mr-2" /> INGRESOS
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-white/5 border border-white/10 backdrop-blur-md p-2 rounded-2xl">
+                 <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 text-amber-400 font-black text-[9px] uppercase tracking-widest flex items-center justify-center">
+                    <TrendingUp className="w-3.5 h-3.5 mr-1" /> INGRESOS
                  </div>
-                 <div className="flex gap-1.5">
-                    <button onClick={() => setShowInvoiceModal(true)} className="bg-brand-700 text-white px-4 py-2.5 rounded-xl hover:bg-brand-900 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
-                      <FileInput className="w-3.5 h-3.5 mr-1.5" /> FACTURACIÓN
+                 <div className="flex flex-wrap gap-1.5">
+                    <button onClick={() => setShowInvoiceModal(true)} className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-slate-950 px-3.5 py-2 rounded-xl transition flex items-center justify-center font-black text-[9px] uppercase tracking-wider active:scale-95 shadow-md shadow-amber-500/20">
+                      <FileInput className="w-3.5 h-3.5 mr-1" /> FACTURA
                     </button>
-                    <button onClick={() => setShowReceiptModal(true)} className="bg-blue-600 text-white px-4 py-2.5 rounded-xl hover:bg-blue-700 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
-                      <ReceiptText className="w-3.5 h-3.5 mr-1.5" /> RECIBO RH
+                    <button onClick={() => setShowReceiptModal(true)} className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-xl transition flex items-center justify-center font-black text-[9px] uppercase tracking-wider active:scale-95 shadow-md">
+                      <ReceiptText className="w-3.5 h-3.5 mr-1" /> RECIBO RH
                     </button>
-                    <button onClick={() => setShowNcModal(true)} className="bg-green-600 text-white px-4 py-2.5 rounded-xl hover:bg-green-700 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
-                      <FileText className="w-3.5 h-3.5 mr-1.5" /> N. CRÉDITO
+                    <button onClick={() => setShowNcModal(true)} className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-xl transition flex items-center justify-center font-black text-[9px] uppercase tracking-wider active:scale-95">
+                      <FileText className="w-3 h-3 mr-1" /> NC
                     </button>
-                    <button onClick={() => setShowNdModal(true)} className="bg-red-600 text-white px-4 py-2.5 rounded-xl hover:bg-red-700 transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95">
-                      <FileText className="w-3.5 h-3.5 mr-1.5" /> N. DÉBITO
+                    <button onClick={() => setShowNdModal(true)} className="flex-1 sm:flex-none bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-xl transition flex items-center justify-center font-black text-[9px] uppercase tracking-wider active:scale-95">
+                      <FileText className="w-3 h-3 mr-1" /> ND
                     </button>
                  </div>
               </div>
 
               {/* Bloque Egresos */}
-              <div className="flex items-center gap-2 bg-white/60 backdrop-blur-md p-1.5 rounded-[2rem] border border-gray-100 shadow-sm w-full lg:w-auto">
-                 <div className="px-4 py-2 rounded-2xl bg-orange-50 text-orange-600 font-black text-[10px] uppercase tracking-widest flex items-center">
-                    <TrendingDown className="w-4 h-4 mr-2" /> EGRESOS
+              <div className="flex items-center gap-2 bg-white/5 border border-white/10 backdrop-blur-md p-2 rounded-2xl">
+                 <div className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 font-black text-[9px] uppercase tracking-widest flex items-center">
+                    <TrendingDown className="w-3.5 h-3.5 mr-1 text-slate-400" /> EGRESOS
                  </div>
-                 <button onClick={() => setIsUploading(!isUploading)} className={`px-5 py-2.5 rounded-xl transition flex items-center shadow-sm font-black text-[9px] uppercase tracking-wider active:scale-95 ${isUploading ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
-                    {isUploading ? <X className="w-3.5 h-3.5 mr-1.5"/> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                 <button onClick={() => setIsUploading(!isUploading)} className={`px-4 py-2 rounded-xl transition flex items-center justify-center font-black text-[9px] uppercase tracking-wider active:scale-95 ${isUploading ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'bg-slate-800 text-white hover:bg-slate-700 border border-slate-700'}`}>
+                    {isUploading ? <X className="w-3.5 h-3.5 mr-1"/> : <Plus className="w-3.5 h-3.5 mr-1" />}
                     {isUploading ? 'Cerrar' : 'SUBIR GASTO'}
                  </button>
               </div>
             </>
           )}
-          {isSubUser && (
-            <div className="bg-blue-50 border-2 border-blue-200 px-4 py-2.5 rounded-2xl flex items-center gap-2">
-              <Eye className="w-4 h-4 text-blue-600" />
-              <span className="text-[10px] font-black text-blue-700 uppercase">Modo solo lectura</span>
-            </div>
-          )}
 
-          <button 
-            onClick={() => setActiveView(activeView === 'dashboard' ? 'settings' : 'dashboard')} 
-            className={`p-3 rounded-2xl transition shadow-lg flex items-center justify-center active:scale-95 ${activeView === 'settings' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-100'}`}
-          >
-            <ShieldCheck className="w-5 h-5" />
-          </button>
-          <button 
-            onClick={() => setActiveView(activeView === 'history' ? 'dashboard' : 'history')} 
-            className={`p-3 rounded-2xl transition shadow-lg flex items-center justify-center active:scale-95 ${activeView === 'history' ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 border border-gray-100'}`}
-          >
-            <History className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {!isSubUser && (
+              <button 
+                onClick={() => setActiveView(activeView === 'dashboard' ? 'settings' : 'dashboard')} 
+                className={`p-2.5 rounded-xl transition flex items-center justify-center active:scale-95 ${activeView === 'settings' ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-white/10 text-white hover:bg-white/20 border border-white/10'}`}
+                title="Ajustes SUNAT y Empresa"
+              >
+                <ShieldCheck className="w-5 h-5" />
+              </button>
+            )}
+            <button 
+              onClick={() => setActiveView(activeView === 'history' ? 'dashboard' : 'history')} 
+              className={`p-2.5 rounded-xl transition flex items-center justify-center active:scale-95 ${activeView === 'history' ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-white/10 text-white hover:bg-white/20 border border-white/10'}`}
+              title="Historial de Suscripciones"
+            >
+              <History className="w-5 h-5" />
+            </button>
+          </div>
         </div>
       </header>
+
+      {/* BANNER ALERTA SOL SI NO TIENE CREDENCIALES CONFIGURADAS */}
+      {currentUser && (!currentUser.solUser || !currentUser.solPass) && (
+        <div className="bg-amber-50 border-2 border-amber-200 p-4 rounded-2xl flex items-center animate-pulse">
+          <AlertTriangle className="w-5 h-5 text-amber-600 mr-3 shrink-0" />
+          <div>
+            <p className="text-xs font-black text-amber-900 uppercase tracking-tighter">Recibos por Honorarios Pendiente</p>
+            <p className="text-[10px] text-amber-700 font-bold uppercase">Configura tu RUC, usuario y clave SOL en tu perfil para emitir Recibos por Honorarios.</p>
+          </div>
+        </div>
+      )}
 
       {activeView === 'settings' ? (
         <div className="animate-fade-in-up space-y-6">
@@ -913,7 +967,7 @@ export const UserDashboard: React.FC = () => {
              </div>
            )}
 
-           <SunatSettings />
+            {!isSubUser && <SunatSettings />}
         </div>
       ) : activeView === 'history' ? (
         <div className="animate-fade-in-up">
@@ -1113,36 +1167,37 @@ export const UserDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* DASHBOARD STATS */}
+      {/* DASHBOARD STATS (ESTILO WEB .DOCX) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col justify-between">
-           <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Gasto Acumulado Mes</p>
-           <h4 className="text-3xl font-black text-gray-900">S/ {stats.monthTotal.toFixed(2)}</h4>
-           <div className="h-10 mt-4"><ResponsiveContainer width="100%" height="100%"><BarChart data={stats.dailyData}><Bar dataKey="monto" fill="#fb8c00" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div>
+        <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-xl shadow-slate-200/50 border border-slate-100 flex flex-col justify-between">
+           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Gasto Acumulado Mes</p>
+           <h4 className="text-3xl font-black text-slate-900">S/ {stats.monthTotal.toFixed(2)}</h4>
+           <div className="h-10 mt-4"><ResponsiveContainer width="100%" height="100%"><BarChart data={stats.dailyData}><Bar dataKey="monto" fill="#F59E0B" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></div>
         </div>
-        <div className="bg-gradient-to-br from-brand-600 to-brand-700 p-6 rounded-3xl shadow-xl text-white relative overflow-hidden group">
-           <div className="absolute top-0 right-0 p-4 opacity-20 pointer-events-none group-hover:scale-125 transition-transform"><ShieldCheck className="w-20 h-20" /></div>
-           <p className="text-[10px] font-black text-orange-200 uppercase tracking-widest mb-1">Estatus SUNAT</p>
+        
+        <div className="bg-gradient-to-br from-[#0B192C] via-slate-900 to-[#0B192C] p-6 md:p-8 rounded-[2rem] shadow-xl text-white relative overflow-hidden group border border-slate-800">
+           <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none group-hover:scale-125 transition-transform"><ShieldCheck className="w-24 h-24 text-amber-500" /></div>
+           <p className="text-[10px] font-black text-amber-400 uppercase tracking-widest mb-1">Estatus SUNAT</p>
            <div className="flex items-center space-x-2">
-              <h4 className="text-2xl font-black italic">Normal</h4>
-              <ShieldCheck className="w-6 h-6 text-brand-100" />
+              <h4 className="text-2xl font-black text-white">Normal</h4>
+              <ShieldCheck className="w-6 h-6 text-emerald-400" />
            </div>
-           <p className="text-[9px] mt-2 opacity-80 uppercase font-bold">Sin observaciones pendientes</p>
+           <p className="text-[9px] mt-2 text-slate-300 font-bold uppercase tracking-wider">Sin observaciones pendientes</p>
         </div>
         
         {/* BOTÓN DE SOPORTE - WHATSAPP / CONTADOR */}
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col justify-between relative group">
+        <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-xl shadow-slate-200/50 border border-slate-100 flex flex-col justify-between relative group">
           {(() => {
             const myAccountant = selectedCompany?.assignedAccountantId ? users.find(u => u.id === selectedCompany.assignedAccountantId && u.role === UserRole.ACCOUNTANT) : null;
             return myAccountant ? (
               <>
-                <div className="absolute top-4 right-4 text-green-500"><MessageCircleMore className="w-6 h-6"/></div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Tu Contador</p>
+                <div className="absolute top-6 right-6 text-emerald-500"><MessageCircleMore className="w-6 h-6"/></div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tu Contador</p>
                 <div className="flex items-center space-x-3 mt-4">
-                  <div className="p-3 bg-brand-50 rounded-2xl text-brand-600"><User className="w-6 h-6"/></div>
+                  <div className="p-3 bg-amber-500/10 rounded-2xl text-amber-600 border border-amber-500/20"><User className="w-6 h-6"/></div>
                   <div>
-                    <p className="text-xs font-black text-gray-800 uppercase leading-tight">{myAccountant.name}</p>
-                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">{myAccountant.email}</p>
+                    <p className="text-xs font-black text-slate-900 uppercase leading-tight">{myAccountant.name}</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">{myAccountant.email}</p>
                   </div>
                 </div>
                 {(() => {
@@ -1156,10 +1211,10 @@ export const UserDashboard: React.FC = () => {
                         window.open(`https://wa.me/${cleanPhone.startsWith('51') ? cleanPhone : '51' + cleanPhone}`, '_blank');
                       }}
                       title={hasPhone ? 'Contactar por WhatsApp' : 'El contador no ha registrado un teléfono'}
-                      className={`mt-4 w-full py-2 rounded-xl text-[10px] font-black uppercase transition flex items-center justify-center gap-2 ${
+                      className={`mt-4 w-full py-3 rounded-2xl text-[10px] font-black uppercase transition flex items-center justify-center gap-2 ${
                         hasPhone
-                          ? 'bg-green-50 text-green-700 hover:bg-green-100 cursor-pointer shadow-sm active:scale-95'
-                          : 'bg-gray-100 text-gray-400 opacity-60 cursor-not-allowed'
+                          ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-md shadow-emerald-500/20 cursor-pointer active:scale-95'
+                          : 'bg-slate-100 text-slate-400 opacity-60 cursor-not-allowed'
                       }`}
                     >
                       <MessageCircleMore className="w-4 h-4" />
@@ -1170,21 +1225,21 @@ export const UserDashboard: React.FC = () => {
               </>
             ) : (
               <>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Contador</p>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Contador</p>
                 <div className="flex items-center space-x-3 mt-4">
-                  <div className="p-3 bg-gray-100 rounded-2xl text-gray-400"><User className="w-6 h-6"/></div>
+                  <div className="p-3 bg-slate-100 rounded-2xl text-slate-400"><User className="w-6 h-6"/></div>
                   <div>
-                    <p className="text-xs font-black text-gray-800 uppercase leading-tight">Sin contador asignado</p>
-                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">Crea uno ahora</p>
+                    <p className="text-xs font-black text-slate-800 uppercase leading-tight">Sin contador asignado</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">Crea uno ahora</p>
                   </div>
                 </div>
                 {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE ? (
                   <button onClick={() => { setAccForm({ name: '', email: '', phone: '' }); setAccPwd(generatePassword()); setAccCreated(false); setShowCreateAccountant(true); }}
-                    className="mt-4 w-full py-2 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition flex items-center justify-center gap-2 shadow-sm">
+                    className="mt-4 w-full py-3 bg-[#0B192C] text-white rounded-2xl text-[10px] font-black uppercase hover:bg-slate-800 transition flex items-center justify-center gap-2 shadow-md">
                     <Plus className="w-4 h-4" /> Crear Contador
                   </button>
                 ) : (
-                  <p className="mt-4 text-[9px] text-gray-400 font-bold uppercase text-center">Activa tu suscripción para crear contadores</p>
+                  <p className="mt-4 text-[9px] text-slate-400 font-bold uppercase text-center">Activa tu suscripción para crear contadores</p>
                 )}
               </>
             );
@@ -1201,16 +1256,16 @@ export const UserDashboard: React.FC = () => {
         const hasInherited = !hasOwnSubscription && accountant?.subscriptionStatus === SubscriptionStatus.ACTIVE;
 
         return (
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-brand-100 flex items-center justify-between gap-4">
+          <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-xl shadow-slate-200/50 border border-slate-100 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
-              <div className="p-3 rounded-2xl bg-brand-50"><CalendarDays className="w-6 h-6 text-brand-600"/></div>
+              <div className="p-3.5 rounded-2xl bg-amber-500/10 text-amber-600 border border-amber-500/20"><CalendarDays className="w-6 h-6"/></div>
               <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Suscripción</p>
-                <p className="text-sm font-black text-gray-900">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Suscripción</p>
+                <p className="text-sm font-black text-slate-900">
                   {hasOwnSubscription ? (
                     <>Activa hasta el {currentUser.subscriptionEndDate ? new Date(currentUser.subscriptionEndDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</>
                   ) : hasInherited ? (
-                    <><span className="text-blue-600">Activa</span> <span className="text-[10px] text-gray-400">(vía contador: {accountant?.name})</span></>
+                    <><span className="text-blue-600">Activa</span> <span className="text-[10px] text-slate-400">(vía contador: {accountant?.name})</span></>
                   ) : currentUser.subscriptionStatus === SubscriptionStatus.EXPIRED ? (
                     <span className="text-red-600">Vencida</span>
                   ) : (
@@ -1219,11 +1274,11 @@ export const UserDashboard: React.FC = () => {
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <button onClick={() => setShowPayment(true)} className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition shadow-sm flex items-center gap-2">
+            <div className="flex items-center gap-3 w-full md:w-auto">
+              <button onClick={() => setShowPayment(true)} className="flex-1 md:flex-none px-5 py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-2xl text-[10px] font-black uppercase transition shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2">
                 <Sparkles className="w-4 h-4" /> {hasOwnSubscription ? 'Renovar' : 'Comprar Plan'}
               </button>
-              <button onClick={() => setActiveView('history')} className="px-5 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-[10px] font-black uppercase hover:bg-gray-200 transition flex items-center gap-2">
+              <button onClick={() => setActiveView('history')} className="flex-1 md:flex-none px-5 py-3 bg-slate-100 text-slate-700 rounded-2xl text-[10px] font-black uppercase hover:bg-slate-200 transition flex items-center justify-center gap-2">
                 <History className="w-4 h-4" /> Historial
               </button>
             </div>
@@ -1232,14 +1287,14 @@ export const UserDashboard: React.FC = () => {
       })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* MOVIMIENTOS RECIENTES */}
-        <div className="lg:col-span-2 bg-white p-8 rounded-3xl shadow-sm border border-gray-100 flex flex-col justify-between">
+        {/* MOVIMIENTOS RECIENTES (ESTILO WEB .DOCX) */}
+        <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-[2rem] shadow-xl shadow-slate-200/50 border border-slate-100 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-6">
-              <h3 className="font-black text-gray-800 flex items-center text-sm uppercase tracking-tighter">
-                <Clock className="w-5 h-5 mr-2 text-brand-500" /> Historial de Movimientos
+              <h3 className="font-black text-slate-900 flex items-center text-sm uppercase tracking-tight">
+                <Clock className="w-5 h-5 mr-2 text-amber-500" /> Historial de Movimientos
               </h3>
-              <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-100 px-3 py-1 rounded-full">
                 Total: {myExpenses.length}
               </span>
             </div>
@@ -1255,24 +1310,24 @@ export const UserDashboard: React.FC = () => {
                 const pageItems = reversed.slice(start, end);
 
                 if (pageItems.length === 0) {
-                  return <div className="py-20 text-center text-gray-400 text-xs italic">No hay movimientos registrados.</div>;
+                  return <div className="py-20 text-center text-slate-400 text-xs font-bold uppercase tracking-wider">No hay movimientos registrados.</div>;
                 }
 
                 return pageItems.map(exp => (
-                  <div key={exp.id} className={`flex items-center justify-between p-4 rounded-2xl border transition ${exp.isPrivate ? 'bg-gray-50 border-gray-100 border-dashed' : 'bg-white border-gray-50 hover:border-brand-100'}`}>
+                  <div key={exp.id} className={`flex items-center justify-between p-4 rounded-2xl border transition ${exp.isPrivate ? 'bg-slate-50 border-slate-200/60 border-dashed' : 'bg-slate-50/50 border-slate-100 hover:border-amber-300'}`}>
                     <div className="flex items-center space-x-4">
-                      <div className={`p-2.5 rounded-xl ${exp.isPrivate ? 'bg-gray-200 text-gray-400' : 'bg-brand-50 text-brand-600'}`}>
+                      <div className={`p-2.5 rounded-xl ${exp.isPrivate ? 'bg-slate-200 text-slate-500' : 'bg-amber-500/10 text-amber-600 border border-amber-500/20'}`}>
                         {exp.isPrivate ? <Lock className="w-4 h-4"/> : <Users className="w-4 h-4"/>}
                       </div>
                       <div>
-                        <p className="font-black text-gray-900 text-sm uppercase truncate max-w-[200px]">{exp.description}</p>
+                        <p className="font-black text-slate-900 text-sm uppercase truncate max-w-[200px]">{exp.description}</p>
                         <div className="flex items-center space-x-2">
-                           <p className="text-[9px] text-gray-400 font-bold uppercase">{exp.date}</p>
-                           {exp.isPrivate && <span className="text-[8px] font-black text-red-500 uppercase tracking-widest bg-red-50 px-1.5 py-0.5 rounded">Personal</span>}
+                           <p className="text-[9px] text-slate-400 font-bold uppercase">{exp.date}</p>
+                           {exp.isPrivate && <span className="text-[8px] font-black text-red-500 uppercase tracking-widest bg-red-50 px-1.5 py-0.5 rounded-md">Personal</span>}
                         </div>
                       </div>
                     </div>
-                    <p className={`font-black ${exp.isPrivate ? 'text-gray-500' : 'text-gray-900'}`}>S/ {exp.amount.toFixed(2)}</p>
+                    <p className={`font-black ${exp.isPrivate ? 'text-slate-500' : 'text-slate-900'}`}>S/ {exp.amount.toFixed(2)}</p>
                   </div>
                 ));
               })()}
@@ -1288,19 +1343,19 @@ export const UserDashboard: React.FC = () => {
             const end = Math.min(currentPage * movementsPerPage, total);
 
             return (
-              <div className="mt-6 pt-4 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-3 text-xs font-bold text-gray-500">
+              <div className="mt-6 pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3 text-xs font-bold text-slate-500">
                   <span>Mostrando {start} - {end} de {total}</span>
-                  <span className="text-gray-300">|</span>
+                  <span className="text-slate-300">|</span>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-black uppercase text-gray-400">Filas:</span>
+                    <span className="text-[10px] font-black uppercase text-slate-400">Filas:</span>
                     <select
                       value={movementsPerPage}
                       onChange={(e) => {
                         setMovementsPerPage(Number(e.target.value));
                         setMovementsPage(1);
                       }}
-                      className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-xs font-bold text-gray-700 outline-none focus:border-brand-500 shadow-sm"
+                      className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-amber-500 shadow-sm"
                     >
                       <option value={5}>5</option>
                       <option value={10}>10</option>
@@ -1314,7 +1369,7 @@ export const UserDashboard: React.FC = () => {
                   <button
                     disabled={currentPage <= 1}
                     onClick={() => setMovementsPage(p => Math.max(1, p - 1))}
-                    className="px-3 py-1.5 rounded-xl border border-gray-200 bg-white text-xs font-black text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-100 transition shadow-sm flex items-center gap-1"
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-black text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50 transition shadow-sm flex items-center gap-1"
                   >
                     <ChevronLeft className="w-4 h-4" /> Anterior
                   </button>
@@ -1325,8 +1380,8 @@ export const UserDashboard: React.FC = () => {
                       onClick={() => setMovementsPage(p)}
                       className={`w-8 h-8 rounded-xl text-xs font-black transition ${
                         currentPage === p
-                          ? 'bg-brand-600 text-white shadow-md'
-                          : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'
+                          ? 'bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/20'
+                          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
                       }`}
                     >
                       {p}
@@ -1336,7 +1391,7 @@ export const UserDashboard: React.FC = () => {
                   <button
                     disabled={currentPage >= totalPages}
                     onClick={() => setMovementsPage(p => Math.min(totalPages, p + 1))}
-                    className="px-3 py-1.5 rounded-xl border border-gray-200 bg-white text-xs font-black text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-100 transition shadow-sm flex items-center gap-1"
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-black text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50 transition shadow-sm flex items-center gap-1"
                   >
                     Siguiente <ChevronRight className="w-4 h-4" />
                   </button>

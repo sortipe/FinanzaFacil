@@ -54,7 +54,44 @@ export const sunatService = {
   ): Promise<SunatResponse> => {
     // Los RH usualmente requieren portal SOL directo o APIs específicas.
     // Por ahora redirigimos al flujo local si se desea.
-    return sunatService.emitirFactura(data, token, apiUrl, userCredentials, 'E001', 'PEN');
+    const payload = {
+      ...data,
+      items: data.items || [{ description: data.description || 'Servicios profesionales', quantity: 1, unitPrice: parseFloat(data.amount) || 0 }],
+      total: data.total ?? data.amount
+    };
+    return sunatService.emitirFactura(payload, token, apiUrl, userCredentials, 'E001', 'PEN');
+  },
+
+  /**
+   * Emite un Recibo por Honorarios (RH) usando el scraper web del Portal SOL
+   */
+  emitirReciboHonorariosScraper: async (
+    data: any,
+    apiUrl: string = BASE_URL_LOCAL
+  ): Promise<SunatResponse> => {
+    try {
+      const base = apiUrl || BASE_URL_LOCAL;
+      const url = base.startsWith('/') ? `${base}/scrape/rh` : `${base}/scrape/rh`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      const result = await response.json();
+      if (response.ok && result.ok) {
+        return {
+          success: true,
+          data: result,
+          pdfUrl: result.pdfPath ? result.pdfPath.replace(/\\/g, '/').replace(/^.*?downloads/, '/downloads') : '',
+          xmlUrl: result.xmlPath ? result.xmlPath.replace(/\\/g, '/').replace(/^.*?downloads/, '/downloads') : '',
+          sunatStatus: 'ACEPTADO'
+        };
+      }
+      return { success: false, error: result.error || 'Error del scraper SUNAT' };
+    } catch (error: any) {
+      console.error('Error en scraper RH:', error);
+      return { success: false, error: 'Error de conexión con el scraper de SUNAT: ' + (error.message || 'Desconocido') };
+    }
   },
 
 
@@ -70,7 +107,7 @@ export const sunatService = {
     currency?: string
   ): Promise<SunatResponse> => {
     try {
-      const isLocal = apiUrl && apiUrl.includes('localhost');
+      const isLocal = !apiUrl || apiUrl.startsWith('/') || apiUrl.includes('localhost');
       
       if (isLocal) {
           const payload = {

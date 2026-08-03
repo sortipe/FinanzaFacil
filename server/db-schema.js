@@ -231,6 +231,18 @@ const ALTER_AND_MIGRATE = async () => {
     await db.query(`ALTER TABLE users ADD COLUMN parent_id VARCHAR(50)`).catch(() => {});
   }
 
+  // --- Add employee SOL credential columns to users (RH via Portal Web SOL) ---
+  const userSolCols = [
+    ['ruc', 'VARCHAR(11)'],
+    ['sol_user', 'VARCHAR(255)'],
+    ['sol_pass', 'VARCHAR(255)'],
+  ];
+  for (const [col, type] of userSolCols) {
+    if (!(await columnExists('users', col))) {
+      await db.query(`ALTER TABLE users ADD COLUMN ${col} ${type}`).catch(() => {});
+    }
+  }
+
   // --- MIGRATION: Create default company for existing users ---
   const companiesExist = await db.query('SELECT COUNT(*) AS cnt FROM companies');
   const usersExist = await db.query("SELECT COUNT(*) AS cnt FROM users WHERE role='USER'");

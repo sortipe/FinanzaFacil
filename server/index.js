@@ -1,6 +1,7 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
+const { spawn } = require('child_process');
 const SunatEngine = require('./sunat-engine');
 const { initSchema } = require('./db-schema');
 
@@ -74,7 +75,18 @@ app.post('/verificar-conexion', async (req, res) => {
         // Usamos un nombre de archivo aleatorio para evitar el error de "Documento igual en proceso"
         const testId = `TEST-${Math.floor(Math.random() * 1000000)}`;
         const response = await testEngine.sendToSunat(testId, '<Test>Sign</Test>', credentials);
-        
+
+        // Detectar Fault SOAP en la respuesta (HTTP 200 no implica credenciales válidas)
+        const isFault = response && (response.includes('<soap-env:Fault') || response.includes('<soap:Fault'));
+        if (isFault) {
+            const faultString = response.split('<faultstring>')[1]?.split('</faultstring>')[0] || 'SUNAT rechazó las credenciales';
+            return res.status(400).json({
+                success: false,
+                error: faultString,
+                sunatResponse: response
+            });
+        }
+
         res.json({
             success: true,
             message: 'Conexión exitosa con SUNAT'
@@ -242,11 +254,24 @@ app.post('/emitir-nota', async (req, res) => {
 
         // Serie for NC: FC01 (factura crédito) / BC01 (boleta crédito)
         // Serie for ND: FD01 (factura débito) / BD01 (boleta débito)
-        const fileName = `${noteData.id}`;
+        const tipoDoc = isCredit ? '07' : '08';
+        const fileName = `${currentConfig.ruc}-${tipoDoc}-${noteData.id}`;
+        console.log(`>>> ENVIANDO NOTA A SUNAT (${currentConfig.env}): ${fileName}`);
 
         // Send to SUNAT
         const response = await engine.sendToSunat(fileName, signedXml, currentConfig);
         const isAccepted = !response.includes('<soap-env:Fault') && !response.includes('<soap:Fault');
+
+        // Detectar Fault y extraer el faultstring real de SUNAT
+        const isFault = response && (response.includes('<soap-env:Fault') || response.includes('<soap:Fault'));
+        if (isFault) {
+            const faultString = response.split('<faultstring>')[1]?.split('</faultstring>')[0] || 'Error desconocido en SUNAT';
+            return res.status(400).json({
+                success: false,
+                error: faultString,
+                sunatResponse: response
+            });
+        }
 
         // Extract CDR
         const cdrMatch = response.match(/<applicationResponse>([\s\S]*?)<\/applicationResponse>/);
@@ -416,6 +441,91 @@ app.post('/api/send-welcome-email', async (req, res) => {
         res.json({ success: true, warning: err.message, message: 'Contraseña disponible en consola del servidor' });
     }
 });
+
+// --- Emitir Recibo por Honorarios vía scraper web (Portal SOL) ---
+app.post('/scrape/rh', async (req, res) => {
+    try {
+        const payload = req.body || {};
+        console.log('[SUNAT] scrape/rh payload keys:', Object.keys(payload));
+        const required = ['ruc', 'solUser', 'solPass', 'docNumber', 'nameOrRazon', 'concepto', 'montoNeto'];
+        const missing = required.filter(key => !payload[key]);
+        if (missing.length > 0) {
+            return res.status(400).json({ error: `Missing fields: ${missing.join(', ')}` });
+        }
+
+        const env = {
+            ...process.env,
+            SUNAT_NON_INTERACTIVE: 'true',
+            SUNAT_RUC: String(payload.ruc || ''),
+            SUNAT_USUARIO: String(payload.solUser || ''),
+            SUNAT_CLAVE: String(payload.solPass || ''),
+            SUNAT_DOC_TYPE: String(payload.docType || 'DNI'),
+            SUNAT_DOC_NUMBER: String(payload.docNumber || ''),
+            SUNAT_NOMBRE_RECEPTOR: String(payload.nameOrRazon || ''),
+            SUNAT_TIPO_RENTA: String(payload.tipoRenta || '4'),
+            SUNAT_CONCEPTO: String(payload.concepto || ''),
+            SUNAT_MONEDA: String(payload.moneda || 'SOLES'),
+            SUNAT_MONTO_NETO: String(payload.montoNeto || ''),
+            SUNAT_RETENCION: String(payload.retencion || 'no'),
+            SUNAT_HEADLESS: String(payload.headless ?? 'false'),
+            SUNAT_STOP_BEFORE_EMIT: String(payload.stopBeforeEmit ?? 'true'),
+        };
+
+        const child = spawn('node', ['scripts/sunat/rxh-scraper.mjs'], {
+            env,
+            cwd: require('path').resolve(__dirname, '..'),
+            stdio: ['ignore', 'pipe', 'pipe'],
+            detached: false,
+            shell: false,
+            windowsHide: true,
+        });
+
+        let stdoutLog = '';
+        let stderrLog = '';
+
+        if (child.stdout) {
+            child.stdout.on('data', chunk => {
+                const text = chunk.toString();
+                stdoutLog += text;
+                console.log(`[SUNAT] ${text}`);
+            });
+        }
+        if (child.stderr) {
+            child.stderr.on('data', chunk => {
+                const text = chunk.toString();
+                stderrLog += text;
+                console.error(`[SUNAT] ${text}`);
+            });
+        }
+
+        const exitInfo = await new Promise((resolve, reject) => {
+            child.on('error', reject);
+            child.on('exit', (code, signal) => resolve({ code, signal }));
+        });
+
+        const pdfMatch = stdoutLog.match(/PDF descargado:\s*(.+)/i);
+        const xmlMatch = stdoutLog.match(/XML descargado:\s*(.+)/i);
+        const pdfPath = pdfMatch ? pdfMatch[1].trim() : '';
+        const xmlPath = xmlMatch ? xmlMatch[1].trim() : '';
+
+        if (exitInfo.code === 0) {
+            return res.json({ ok: true, pdfPath, xmlPath });
+        }
+        return res.status(500).json({
+            ok: false,
+            error: `Scraper failed with code ${exitInfo.code}`,
+            pdfPath,
+            xmlPath,
+            stderr: stderrLog.trim(),
+        });
+    } catch (err) {
+        console.error('[SUNAT] scrape/rh error:', err);
+        return res.status(500).json({ error: err.message || 'Server error' });
+    }
+});
+
+// Servir los documentos generados por los scrapers
+app.use('/downloads', express.static(require('path').resolve(__dirname, '../downloads')));
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {

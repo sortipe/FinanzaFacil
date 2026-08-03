@@ -17,6 +17,7 @@ const USER_FIELDS = {
   phone: 'phone', profile_picture: 'profilePicture',
   subscription_start_date: 'subscriptionStartDate', subscription_end_date: 'subscriptionEndDate',
   parent_id: 'parentId',
+  ruc: 'ruc', sol_user: 'solUser', sol_pass: 'solPass',
   created_at: 'createdAt', updated_at: 'updatedAt'
 };
 
@@ -109,10 +110,11 @@ router.get('/users/:id', async (req, res) => {
 router.post('/users', async (req, res) => {
   try {
     const user = req.body;
-    await db.query(`INSERT INTO users (id, name, email, role, password, must_change_password, subscription_status, phone, profile_picture, subscription_start_date, subscription_end_date, parent_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [
+    await db.query(`INSERT INTO users (id, name, email, role, password, must_change_password, subscription_status, phone, profile_picture, subscription_start_date, subscription_end_date, parent_id, ruc, sol_user, sol_pass) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
       user.id, user.name, user.email, user.role || 'USER', user.password || null, user.mustChangePassword ? 1 : 0,
       user.subscriptionStatus || 'PENDING', user.phone || null, user.profilePicture || null,
-      user.subscriptionStartDate || null, user.subscriptionEndDate || null, user.parentId || null
+      user.subscriptionStartDate || null, user.subscriptionEndDate || null, user.parentId || null,
+      user.ruc || null, user.solUser || null, user.solPass || null
     ]);
     res.json({ success: true, user });
   } catch (e) {
@@ -133,7 +135,8 @@ router.put('/users/:id', async (req, res) => {
       mustChangePassword: 'must_change_password', subscriptionStatus: 'subscription_status',
       phone: 'phone', profilePicture: 'profile_picture',
       subscriptionStartDate: 'subscription_start_date', subscriptionEndDate: 'subscription_end_date',
-      parentId: 'parent_id'
+      parentId: 'parent_id',
+      ruc: 'ruc', solUser: 'sol_user', solPass: 'sol_pass'
     };
     for (const [key, col] of Object.entries(map)) {
       if (data[key] !== undefined) {
