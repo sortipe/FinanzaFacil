@@ -76,6 +76,9 @@ export const AdminDashboard: React.FC = () => {
     email: '',
     role: UserRole.USER,
     subscriptionStatus: SubscriptionStatus.PENDING,
+    ruc: '',
+    solUser: '',
+    solPass: '',
   });
   const [generatedPassword, setGeneratedPassword] = useState('');
 
@@ -234,6 +237,7 @@ export const AdminDashboard: React.FC = () => {
     setGeneratedPassword(pwd);
     setUserFormData({
       name: '', email: '', role: UserRole.USER, subscriptionStatus: SubscriptionStatus.PENDING,
+      ruc: '', solUser: '', solPass: '',
     });
     setShowUserModal(true);
   };
@@ -244,6 +248,7 @@ export const AdminDashboard: React.FC = () => {
     setUserFormData({
       name: user.name, email: user.email, role: user.role,
       subscriptionStatus: user.subscriptionStatus || SubscriptionStatus.PENDING,
+      ruc: user.ruc || '', solUser: user.solUser || '', solPass: user.solPass || '',
     });
     setShowUserModal(true);
   };
@@ -425,9 +430,14 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="px-6 py-4">
                           {user.role === UserRole.USER && (
-                            <div className="flex items-center space-x-2">
-                              <span className={`w-2 h-2 rounded-full ${user.subscriptionStatus === SubscriptionStatus.ACTIVE ? 'bg-green-500' : user.subscriptionStatus === SubscriptionStatus.EXPIRED ? 'bg-red-500' : 'bg-yellow-500'}`}></span>
-                              <span className="text-[10px] font-black uppercase text-gray-600">{user.subscriptionStatus}</span>
+                            <div className="flex flex-col items-start space-y-1.5">
+                              <div className="flex items-center space-x-2">
+                                <span className={`w-2 h-2 rounded-full ${user.subscriptionStatus === SubscriptionStatus.ACTIVE ? 'bg-green-500' : user.subscriptionStatus === SubscriptionStatus.EXPIRED ? 'bg-red-500' : 'bg-yellow-500'}`}></span>
+                                <span className="text-[10px] font-black uppercase text-gray-600">{user.subscriptionStatus}</span>
+                              </div>
+                              <span className={`px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase ${user.solUser && user.solPass ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                {user.solUser && user.solPass ? 'SOL Configurado' : 'SOL Pendiente'}
+                              </span>
                             </div>
                           )}
                         </td>
@@ -1136,6 +1146,25 @@ export const AdminDashboard: React.FC = () => {
                       </select>
                     </div>
                   )}
+               </div>
+
+               <div className="border-t border-dashed border-gray-200 pt-6">
+                 <p className="text-xs font-black text-brand-900 uppercase tracking-tight mb-1">Datos SUNAT para Recibos por Honorarios</p>
+                 <p className="text-[10px] text-gray-400 font-bold uppercase mb-4">RUC personal + credenciales SOL del empleado.</p>
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                   <div className="sm:col-span-2">
+                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">RUC (Personal)</label>
+                     <input type="text" maxLength={11} placeholder="20123456789" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={userFormData.ruc} onChange={e => setUserFormData({...userFormData, ruc: e.target.value.replace(/\D/g, '')})} />
+                   </div>
+                   <div>
+                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Usuario SOL</label>
+                     <input type="text" placeholder="AAAFFF11111" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={userFormData.solUser} onChange={e => setUserFormData({...userFormData, solUser: e.target.value.toUpperCase()})} />
+                   </div>
+                   <div>
+                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Clave SOL</label>
+                     <input type="password" placeholder="••••••••" className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 bg-white focus:border-brand-500 outline-none" value={userFormData.solPass} onChange={e => setUserFormData({...userFormData, solPass: e.target.value})} />
+                   </div>
+                 </div>
                </div>
 
                <div className="pt-6 border-t flex space-x-3">

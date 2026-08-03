@@ -20,19 +20,25 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     detail: ''
   });
   const [complaintSuccess, setComplaintSuccess] = useState(false);
-  
+
   const [formData, setFormData] = useState({
     name: '',
-    profilePicture: ''
+    profilePicture: '',
+    ruc: '',
+    solUser: '',
+    solPass: ''
   });
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (currentUser && showProfileModal) {
       setFormData({
         name: currentUser.name || '',
-        profilePicture: currentUser.profilePicture || ''
+        profilePicture: currentUser.profilePicture || '',
+        ruc: currentUser.ruc || '',
+        solUser: currentUser.solUser || '',
+        solPass: currentUser.solPass || ''
       });
       setSaveSuccess(false);
     }
@@ -53,7 +59,10 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
     updateUser(currentUser.id, {
        name: formData.name,
-       profilePicture: formData.profilePicture
+       profilePicture: formData.profilePicture,
+       ruc: formData.ruc || undefined,
+       solUser: formData.solUser || undefined,
+       solPass: formData.solPass || undefined
     });
 
     setSaveSuccess(true);
@@ -62,7 +71,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       setSaveSuccess(false);
     }, 1500);
   };
-  
+
   const handleComplaintSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
@@ -114,7 +123,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                </div>
              </button>
            </div>
-           
+
            <div className="px-4 mt-auto">
               <button onClick={() => window.open('https://wa.me/51999888777', '_blank')} className="w-full flex items-center px-4 py-3 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-xl transition-all">
                 <Headphones className="w-4 h-4 mr-3" /> Soporte Premium
@@ -143,7 +152,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               <h3 className="text-lg font-black uppercase tracking-tight text-gray-800">Ajustes de Perfil</h3>
               <button onClick={() => setShowProfileModal(false)}><X className="w-6 h-6 text-gray-400 hover:text-red-500 transition"/></button>
             </div>
-            
+
             <form onSubmit={handleSaveProfile} className="p-8 space-y-6 overflow-y-auto bg-white">
               {saveSuccess ? (
                 <div className="py-12 text-center animate-bounce">
@@ -167,13 +176,51 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   <div className="space-y-4">
                     <div>
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">Nombre Completo</label>
-                      <input 
-                        type="text" 
-                        placeholder="Escribe tu nombre aquí" 
-                        className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300" 
-                        value={formData.name} 
-                        onChange={e => setFormData({...formData, name: e.target.value})} 
+                      <input
+                        type="text"
+                        placeholder="Escribe tu nombre aquí"
+                        className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
+                        value={formData.name}
+                        onChange={e => setFormData({...formData, name: e.target.value})}
                       />
+                    </div>
+                  </div>
+
+                  <div className="border-t border-dashed border-gray-200 pt-6">
+                    <p className="text-xs font-black text-brand-900 uppercase tracking-tight mb-1">Datos SUNAT para Recibos por Honorarios</p>
+                    <p className="text-[10px] text-gray-400 font-bold uppercase mb-4">Usa tu RUC personal y credenciales SOL de empleado.</p>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">RUC (Personal)</label>
+                        <input
+                          type="text"
+                          maxLength={11}
+                          placeholder="20123456789"
+                          className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
+                          value={formData.ruc}
+                          onChange={e => setFormData({...formData, ruc: e.target.value.replace(/\D/g, '')})}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">Usuario SOL</label>
+                        <input
+                          type="text"
+                          placeholder="AAAFFF11111"
+                          className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
+                          value={formData.solUser}
+                          onChange={e => setFormData({...formData, solUser: e.target.value.toUpperCase()})}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">Clave SOL</label>
+                        <input
+                          type="password"
+                          placeholder="••••••••"
+                          className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
+                          value={formData.solPass}
+                          onChange={e => setFormData({...formData, solPass: e.target.value})}
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -196,9 +243,9 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <h3 className="text-lg font-black uppercase tracking-tight">Libro de Reclamaciones</h3>
               </div>
               <button onClick={() => setShowComplaintModal(false)}><X className="w-6 h-6 text-white hover:rotate-90 transition-transform"/></button>
-            </div>
-            
-            <div className="p-8 overflow-y-auto bg-white">
+             </div>
+
+             <div className="p-8 overflow-y-auto bg-white">
               {complaintSuccess ? (
                 <div className="py-12 text-center">
                   <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -220,15 +267,15 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                     <div className="col-span-2">
                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 ml-1">Tipo de Solicitud</label>
                        <div className="flex gap-2">
-                          <button 
-                            type="button" 
+                          <button
+                            type="button"
                             onClick={() => setComplaintForm({...complaintForm, type: 'RECLAMO'})}
                             className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${complaintForm.type === 'RECLAMO' ? 'bg-brand-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}
                           >
                             Reclamo
                           </button>
-                          <button 
-                            type="button" 
+                          <button
+                            type="button"
                             onClick={() => setComplaintForm({...complaintForm, type: 'QUEJA'})}
                             className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${complaintForm.type === 'QUEJA' ? 'bg-brand-600 text-white shadow-lg' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}
                           >
@@ -239,25 +286,25 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
                     <div className="col-span-2">
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">Identificación del Bien Contratado</label>
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         required
                         placeholder="Ej: Servicio de suscripción mensual"
-                        className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-bold text-gray-900 focus:border-brand-500 outline-none transition-all uppercase" 
-                        value={complaintForm.description} 
-                        onChange={e => setComplaintForm({...complaintForm, description: e.target.value})} 
+                        className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-bold text-gray-900 focus:border-brand-500 outline-none transition-all uppercase"
+                        value={complaintForm.description}
+                        onChange={e => setComplaintForm({...complaintForm, description: e.target.value})}
                       />
                     </div>
 
                     <div className="col-span-2">
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">Detalle del Reclamo o Queja</label>
-                      <textarea 
+                      <textarea
                         required
                         rows={4}
                         placeholder="Describe detalladamente lo sucedido..."
-                        className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-bold text-gray-900 focus:border-brand-500 outline-none transition-all" 
-                        value={complaintForm.detail} 
-                        onChange={e => setComplaintForm({...complaintForm, detail: e.target.value})} 
+                        className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-bold text-gray-900 focus:border-brand-500 outline-none transition-all"
+                        value={complaintForm.detail}
+                        onChange={e => setComplaintForm({...complaintForm, detail: e.target.value})}
                       />
                     </div>
                   </div>

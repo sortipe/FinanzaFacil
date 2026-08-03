@@ -499,8 +499,12 @@ export const UserDashboard: React.FC = () => {
     const useLocalEngine = !activeApiUrl || activeApiUrl.includes('localhost') || activeApiUrl.startsWith('/');
     const activeToken = selectedCompany?.sunatToken || sunatGlobalConfig.sunatToken;
     
-    if (!selectedCompany?.solUser || !selectedCompany?.solPass) {
-      setSyncError("Credenciales SOL (usuario y contraseña) no configuradas en la empresa seleccionada.");
+    // RH: el emisor es el empleado (RUC personal + credenciales SOL propias)
+    const solUser = currentUser?.solUser || '';
+    const solPass = currentUser?.solPass || '';
+    const rucEmisor = currentUser?.ruc || '';
+    if (!rucEmisor || !solUser || !solPass) {
+      setSyncError("Credenciales SOL del empleado (RUC, usuario y contraseña) no configuradas. Configúralas en tu perfil para emitir Recibos por Honorarios.");
       return;
     }
     if (!useLocalEngine && !activeToken) {
@@ -512,20 +516,45 @@ export const UserDashboard: React.FC = () => {
     setSunatStatusMsg('Iniciando comunicación con SUNAT...');
     
     try {
-      const response = await sunatService.emitirReciboHonorarios(
-        receiptForm, 
-        activeToken,
-        useLocalEngine ? (activeApiUrl || 'http://localhost:5555') : activeApiUrl,
-        {
-          ruc: selectedCompany?.ruc,
-          user: selectedCompany?.solUser,
-          pass: selectedCompany?.solPass,
-          certBase64: selectedCompany?.certBase64,
-          certPass: selectedCompany?.certPass,
-          emitterName: selectedCompany?.businessName,
-          env: selectedCompany?.sunatEnv || 'PRODUCTION'
-        }
-      );
+      let response;
+      if (useLocalEngine) {
+        // Motor local: usa scraper Playwright del Portal Web SOL
+        const scraperPayload = {
+          ruc: rucEmisor,
+          solUser,
+          solPass,
+          docType: receiptForm.recipientRuc?.length === 8 ? 'DNI' : 'RUC',
+          docNumber: receiptForm.recipientRuc,
+          nameOrRazon: receiptForm.recipientName,
+          concepto: receiptForm.description,
+          moneda: 'SOLES',
+          montoNeto: receiptForm.amount,
+          retencion: receiptForm.applyRetention ? 'si' : 'no',
+          tipoRenta: '4',
+          headless: false,
+          stopBeforeEmit: true,
+        };
+        response = await sunatService.emitirReciboHonorariosScraper(
+          scraperPayload,
+          (activeApiUrl || 'http://localhost:5555')
+        );
+      } else {
+        // API externa (APISUNAT)
+        response = await sunatService.emitirReciboHonorarios(
+          receiptForm,
+          activeToken,
+          activeApiUrl,
+          {
+            ruc: selectedCompany?.ruc,
+            user: selectedCompany?.solUser,
+            pass: selectedCompany?.solPass,
+            certBase64: selectedCompany?.certBase64,
+            certPass: selectedCompany?.certPass,
+            emitterName: selectedCompany?.businessName,
+            env: selectedCompany?.sunatEnv || 'PRODUCTION'
+          }
+        );
+      }
 
       
       if (response.success) {
@@ -778,12 +807,12 @@ export const UserDashboard: React.FC = () => {
           </button>
         )}
         
-        {selectedCompanyId && selectedCompany && (!selectedCompany.solUser || !selectedCompany.solPass) && (
+        {currentUser && (!currentUser.solUser || !currentUser.solPass) && (
           <div className="flex-1 bg-amber-50 border-2 border-amber-200 p-4 rounded-2xl flex items-center animate-pulse">
             <AlertTriangle className="w-5 h-5 text-amber-600 mr-3 shrink-0" />
             <div>
-              <p className="text-xs font-black text-amber-900 uppercase tracking-tighter">Acceso SUNAT Pendiente</p>
-              <p className="text-[10px] text-amber-700 font-bold uppercase">Configura tu usuario y clave SOL en el perfil para emitir comprobantes.</p>
+              <p className="text-xs font-black text-amber-900 uppercase tracking-tighter">Recibos por Honorarios Pendiente</p>
+              <p className="text-[10px] text-amber-700 font-bold uppercase">Configura tu RUC, usuario y clave SOL en tu perfil para emitir Recibos por Honorarios.</p>
             </div>
           </div>
         )}

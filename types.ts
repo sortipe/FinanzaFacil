@@ -47,6 +47,10 @@ export interface User {
   subscriptionStartDate?: string;
   subscriptionEndDate?: string;
   parentId?: string;
+  // Credenciales SOL del empleado (para RH emitido desde Portal Web SOL)
+  ruc?: string;
+  solUser?: string;
+  solPass?: string;
 }
 
 export interface TaxDocument {

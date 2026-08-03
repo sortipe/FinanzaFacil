@@ -20,6 +20,8 @@ export default defineConfig(({ mode }) => {
           '/emitir-nota': { target: 'http://localhost:5555', changeOrigin: true },
           '/consultar-cpe': { target: 'http://localhost:5555', changeOrigin: true },
           '/verificar-conexion': { target: 'http://localhost:5555', changeOrigin: true },
+          '/scrape/rh': { target: 'http://localhost:5555', changeOrigin: true },
+          '/downloads': { target: 'http://localhost:5555', changeOrigin: true },
           '/analizar-recibo': { target: 'http://localhost:5555', changeOrigin: true },
           '/status': { target: 'http://localhost:5555', changeOrigin: true }
         }
