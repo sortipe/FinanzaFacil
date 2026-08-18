@@ -38,15 +38,19 @@ class SunatEngine {
         .up();
 
         // 2. Información de Cabecera (Obligatorio en este orden)
+        const todayDate = new Date().toISOString().split('T')[0];
+        const issueDate = (data.issueDate || data.date || todayDate).toString().trim() || todayDate;
+
         doc.ele('cbc:UBLVersionID').txt('2.1').up()
            .ele('cbc:CustomizationID').txt('2.0').up()
            .ele('cbc:ID').txt(data.id).up()
-           .ele('cbc:IssueDate').txt(data.issueDate).up()
+           .ele('cbc:IssueDate').txt(issueDate).up()
            .ele('cbc:IssueTime').txt(data.issueTime || '00:00:00').up()
-           .ele('cbc:InvoiceTypeCode', { listID: '0101' }).txt(data.id?.startsWith('B') ? '03' : '01').up()
+           .ele('cbc:InvoiceTypeCode', { listID: '0101' }).txt(data.documentType || (data.id?.startsWith('B') ? '03' : data.id?.startsWith('E') ? '04' : data.id?.startsWith('T') ? '09' : data.id?.startsWith('V') ? '31' : '01')).up()
            .ele('cbc:DocumentCurrencyCode').txt(data.currency || 'PEN').up();
 
         const invoice = doc;
+        const emitterName = (data.emitterName || this.config.emitterName || this.config.businessName || 'EMPRESA').toString().trim() || 'EMPRESA';
         invoice.ele('cac:Signature')
                 .ele('cbc:ID').txt(this.config.ruc).up()
                 .ele('cac:SignatoryParty')
@@ -54,7 +58,7 @@ class SunatEngine {
                         .ele('cbc:ID').txt(this.config.ruc).up()
                     .up()
                     .ele('cac:PartyName')
-                        .ele('cbc:Name').txt(data.emitterName).up()
+                        .ele('cbc:Name').txt(emitterName).up()
                     .up()
                 .up()
                 .ele('cac:DigitalSignatureAttachment')
@@ -64,13 +68,24 @@ class SunatEngine {
                 .up()
             .up()
             
+        const codEstablecimiento = String(this.config.codEstablecimiento && this.config.codEstablecimiento !== '0' ? this.config.codEstablecimiento : '0000').padStart(4, '0');
+
         invoice.ele('cac:AccountingSupplierParty')
                 .ele('cac:Party')
                     .ele('cac:PartyIdentification')
                         .ele('cbc:ID', { schemeID: '6' }).txt(this.config.ruc).up()
                     .up()
                     .ele('cac:PartyLegalEntity')
-                        .ele('cbc:RegistrationName').txt(data.emitterName).up()
+                        .ele('cbc:RegistrationName').txt(emitterName).up()
+                        .ele('cac:RegistrationAddress')
+                            .ele('cbc:AddressTypeCode', { listAgencyName: 'PE:SUNAT', listName: 'Establecimientos anexos' }).txt(codEstablecimiento).up()
+                            .ele('cbc:CityName').txt(this.config.ubigeo || '150101').up()
+                            .ele('cbc:CountrySubentity').txt(this.config.department || 'LIMA').up()
+                            .ele('cbc:District').txt(this.config.district || 'LIMA').up()
+                            .ele('cac:Country')
+                                .ele('cbc:IdentificationCode').txt('PE').up()
+                            .up()
+                        .up()
                     .up()
                 .up()
             .up();
@@ -178,28 +193,43 @@ class SunatEngine {
             .up()
         .up();
 
+        const todayDate = new Date().toISOString().split('T')[0];
+        const issueDate = (data.issueDate || data.date || todayDate).toString().trim() || todayDate;
+
         doc.ele('cbc:UBLVersionID').txt('2.1').up()
            .ele('cbc:CustomizationID').txt('2.0').up()
            .ele('cbc:ID').txt(data.id).up()
-           .ele('cbc:IssueDate').txt(data.issueDate).up()
-           .ele('cbc:IssueTime').txt(data.issueTime || '00:00:00').up()
-           .ele('cbc:DocumentCurrencyCode').txt(data.currency || 'PEN').up();
+           .ele('cbc:IssueDate').txt(issueDate).up()
+           .ele('cbc:IssueTime').txt(data.issueTime || '00:00:00').up();
+
+        if (data.reasonDescription) {
+            doc.ele('cbc:Note', { languageLocaleID: '1000' }).txt(data.reasonDescription).up();
+        }
+
+        doc.ele('cbc:DocumentCurrencyCode').txt(data.currency || 'PEN').up();
+
+        // DiscrepancyResponse - motivo de la nota de crédito según SUNAT UBL 2.1
+        const origDocId = String(data.originalDocId || '').replace(/^BB([0-9]{3}-)/i, 'B$1').replace(/^FF([0-9]{3}-)/i, 'F$1');
+        const docTypeCode = (origDocId.startsWith('B') || origDocId.startsWith('BC')) ? '03' : '01';
+        const reasonCode = data.reasonCode || '01';
+        const reasonDesc = data.reasonDescription || 'ANULACION DE LA OPERACION';
+
+        doc.ele('cac:DiscrepancyResponse')
+            .ele('cbc:ReferenceID').txt(origDocId).up()
+            .ele('cbc:ResponseCode').txt(reasonCode).up()
+            .ele('cbc:Description').txt(reasonDesc).up()
+        .up();
 
         // BillingReference - referencia al documento original
         doc.ele('cac:BillingReference')
             .ele('cac:InvoiceDocumentReference')
-                .ele('cbc:ID').txt(data.originalDocId).up()
-                .ele('cbc:IssueDate').txt(data.originalDocDate).up()
+                .ele('cbc:ID').txt(origDocId).up()
+                .ele('cbc:DocumentTypeCode').txt(docTypeCode).up()
             .up()
         .up();
 
-        // ReasonCode - motivo de la nota
-        if (data.reasonCode) {
-            doc.ele('cbc:Note').txt(data.reasonDescription || '').up();
-            doc.ele('cbc:CreditNoteTypeCode').txt(data.reasonCode).up();
-        }
-
         // Signature
+        const emitterName = (data.emitterName || this.config.emitterName || this.config.businessName || 'EMPRESA').toString().trim() || 'EMPRESA';
         doc.ele('cac:Signature')
                 .ele('cbc:ID').txt(this.config.ruc).up()
                 .ele('cac:SignatoryParty')
@@ -207,7 +237,7 @@ class SunatEngine {
                         .ele('cbc:ID').txt(this.config.ruc).up()
                     .up()
                     .ele('cac:PartyName')
-                        .ele('cbc:Name').txt(data.emitterName).up()
+                        .ele('cbc:Name').txt(emitterName).up()
                     .up()
                 .up()
                 .ele('cac:DigitalSignatureAttachment')
@@ -218,13 +248,24 @@ class SunatEngine {
             .up();
 
         // Emisor
+        const codEstablecimiento = String(this.config.codEstablecimiento && this.config.codEstablecimiento !== '0' ? this.config.codEstablecimiento : '0000').padStart(4, '0');
+
         doc.ele('cac:AccountingSupplierParty')
                 .ele('cac:Party')
                     .ele('cac:PartyIdentification')
                         .ele('cbc:ID', { schemeID: '6' }).txt(this.config.ruc).up()
                     .up()
                     .ele('cac:PartyLegalEntity')
-                        .ele('cbc:RegistrationName').txt(data.emitterName).up()
+                        .ele('cbc:RegistrationName').txt(emitterName).up()
+                        .ele('cac:RegistrationAddress')
+                            .ele('cbc:AddressTypeCode', { listAgencyName: 'PE:SUNAT', listName: 'Establecimientos anexos' }).txt(codEstablecimiento).up()
+                            .ele('cbc:CityName').txt(this.config.ubigeo || '150101').up()
+                            .ele('cbc:CountrySubentity').txt(this.config.department || 'LIMA').up()
+                            .ele('cbc:District').txt(this.config.district || 'LIMA').up()
+                            .ele('cac:Country')
+                                .ele('cbc:IdentificationCode').txt('PE').up()
+                            .up()
+                        .up()
                     .up()
                 .up()
             .up();
@@ -233,7 +274,7 @@ class SunatEngine {
         doc.ele('cac:AccountingCustomerParty')
                 .ele('cac:Party')
                     .ele('cac:PartyIdentification')
-                        .ele('cbc:ID', { schemeID: data.customerType }).txt(data.customerRuc).up()
+                        .ele('cbc:ID', { schemeID: data.customerType || (data.customerRuc?.length === 8 ? '1' : '6') }).txt(data.customerRuc).up()
                     .up()
                     .ele('cac:PartyLegalEntity')
                         .ele('cbc:RegistrationName').txt(data.customerName).up()
@@ -262,7 +303,6 @@ class SunatEngine {
         .up();
 
         doc.ele('cac:LegalMonetaryTotal')
-            .ele('cbc:TaxExclusiveAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
             .ele('cbc:PayableAmount', { currencyID: data.currency || 'PEN' }).txt(total.toFixed(2)).up()
         .up();
 
@@ -294,7 +334,7 @@ class SunatEngine {
                 .up()
             .up()
             .ele('cac:Item')
-                .ele('cbc:Description').txt(data.items?.[0]?.description || 'Nota de Crédito').up()
+                .ele('cbc:Description').txt(data.items?.[0]?.description || reasonDesc).up()
             .up()
             .ele('cac:Price')
                 .ele('cbc:PriceAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
@@ -325,25 +365,38 @@ class SunatEngine {
             .up()
         .up();
 
+        const todayDate = new Date().toISOString().split('T')[0];
+        const issueDate = (data.issueDate || data.date || todayDate).toString().trim() || todayDate;
+
         doc.ele('cbc:UBLVersionID').txt('2.1').up()
            .ele('cbc:CustomizationID').txt('2.0').up()
            .ele('cbc:ID').txt(data.id).up()
-           .ele('cbc:IssueDate').txt(data.issueDate).up()
-           .ele('cbc:IssueTime').txt(data.issueTime || '00:00:00').up()
-           .ele('cbc:DocumentCurrencyCode').txt(data.currency || 'PEN').up();
+           .ele('cbc:IssueDate').txt(issueDate).up()
+           .ele('cbc:IssueTime').txt(data.issueTime || '00:00:00').up();
 
-        // BillingReference
-        doc.ele('cac:BillingReference')
-            .ele('cac:InvoiceDocumentReference')
-                .ele('cbc:ID').txt(data.originalDocId).up()
-                .ele('cbc:IssueDate').txt(data.originalDocDate).up()
-            .up()
+        if (data.reasonDescription) {
+            doc.ele('cbc:Note', { languageLocaleID: '1000' }).txt(data.reasonDescription).up();
+        }
+
+        doc.ele('cbc:DocumentCurrencyCode').txt(data.currency || 'PEN').up();
+
+        const origDocId = data.originalDocId || '';
+        const docTypeCode = (origDocId.startsWith('B') || origDocId.startsWith('BC')) ? '03' : '01';
+        const reasonCode = data.reasonCode || '01';
+        const reasonDesc = data.reasonDescription || 'INTERES POR MORA';
+
+        doc.ele('cac:DiscrepancyResponse')
+            .ele('cbc:ReferenceID').txt(origDocId).up()
+            .ele('cbc:ResponseCode').txt(reasonCode).up()
+            .ele('cbc:Description').txt(reasonDesc).up()
         .up();
 
-        if (data.reasonCode) {
-            doc.ele('cbc:Note').txt(data.reasonDescription || '').up();
-            doc.ele('cbc:DebitNoteTypeCode').txt(data.reasonCode).up();
-        }
+        doc.ele('cac:BillingReference')
+            .ele('cac:InvoiceDocumentReference')
+                .ele('cbc:ID').txt(origDocId).up()
+                .ele('cbc:DocumentTypeCode').txt(docTypeCode).up()
+            .up()
+        .up();
 
         // Signature
         doc.ele('cac:Signature')
@@ -363,6 +416,8 @@ class SunatEngine {
                 .up()
             .up();
 
+        const codEstablecimiento = String(this.config.codEstablecimiento && this.config.codEstablecimiento !== '0' ? this.config.codEstablecimiento : '0000').padStart(4, '0');
+
         doc.ele('cac:AccountingSupplierParty')
                 .ele('cac:Party')
                     .ele('cac:PartyIdentification')
@@ -370,6 +425,15 @@ class SunatEngine {
                     .up()
                     .ele('cac:PartyLegalEntity')
                         .ele('cbc:RegistrationName').txt(data.emitterName).up()
+                        .ele('cac:RegistrationAddress')
+                            .ele('cbc:AddressTypeCode', { listAgencyName: 'PE:SUNAT', listName: 'Establecimientos anexos' }).txt(codEstablecimiento).up()
+                            .ele('cbc:CityName').txt(this.config.ubigeo || '150101').up()
+                            .ele('cbc:CountrySubentity').txt(this.config.department || 'LIMA').up()
+                            .ele('cbc:District').txt(this.config.district || 'LIMA').up()
+                            .ele('cac:Country')
+                                .ele('cbc:IdentificationCode').txt('PE').up()
+                            .up()
+                        .up()
                     .up()
                 .up()
             .up();
@@ -377,7 +441,7 @@ class SunatEngine {
         doc.ele('cac:AccountingCustomerParty')
                 .ele('cac:Party')
                     .ele('cac:PartyIdentification')
-                        .ele('cbc:ID', { schemeID: data.customerType }).txt(data.customerRuc).up()
+                        .ele('cbc:ID', { schemeID: data.customerType || (data.customerRuc?.length === 8 ? '1' : '6') }).txt(data.customerRuc).up()
                     .up()
                     .ele('cac:PartyLegalEntity')
                         .ele('cbc:RegistrationName').txt(data.customerName).up()
@@ -405,7 +469,6 @@ class SunatEngine {
         .up();
 
         doc.ele('cac:RequestedMonetaryTotal')
-            .ele('cbc:LineExtensionAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
             .ele('cbc:PayableAmount', { currencyID: data.currency || 'PEN' }).txt(total.toFixed(2)).up()
         .up();
 
@@ -436,7 +499,7 @@ class SunatEngine {
                 .up()
             .up()
             .ele('cac:Item')
-                .ele('cbc:Description').txt(data.items?.[0]?.description || 'Nota de Débito').up()
+                .ele('cbc:Description').txt(data.items?.[0]?.description || reasonDesc).up()
             .up()
             .ele('cac:Price')
                 .ele('cbc:PriceAmount', { currencyID: data.currency || 'PEN' }).txt(gravada.toFixed(2)).up()
@@ -613,6 +676,78 @@ class SunatEngine {
             description,
             raw: data
         };
+    }
+
+    /**
+     * Valida las credenciales SOL contra SUNAT probando la autenticación SOAP en billService
+     */
+    async verificarCredenciales(dynamicConfig) {
+        const conf = dynamicConfig || this.config;
+        const soapEnvelope = `
+            <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ser="http://service.sunat.gob.pe" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+                <soapenv:Header>
+                    <wsse:Security>
+                        <wsse:UsernameToken>
+                            <wsse:Username>${conf.ruc}${conf.user}</wsse:Username>
+                            <wsse:Password>${conf.pass}</wsse:Password>
+                        </wsse:UsernameToken>
+                    </wsse:Security>
+                </soapenv:Header>
+                <soapenv:Body>
+                    <ser:sendBill>
+                        <fileName>dummy.zip</fileName>
+                        <contentFile>dGVzdA==</contentFile>
+                    </ser:sendBill>
+                </soapenv:Body>
+            </soapenv:Envelope>
+        `;
+
+        const url = conf.env === 'PRODUCTION'
+            ? 'https://e-factura.sunat.gob.pe/ol-ti-itcpfegem/billService'
+            : 'https://e-beta.sunat.gob.pe/ol-ti-itcpfegem-beta/billService';
+
+        try {
+            const response = await axios.post(url, soapEnvelope, {
+                headers: {
+                    'Content-Type': 'text/xml;charset=utf-8',
+                    'SOAPAction': 'urn:sendBill'
+                },
+                timeout: 15000
+            });
+
+            const data = typeof response.data === 'string' ? response.data : String(response.data);
+            
+            // Si SUNAT responde Client.0102 o error de auth
+            if (data.includes('Client.0102') || data.includes('clave SOL es incorrecta')) {
+                const faultstring = data.match(/<faultstring[^>]*>([^<]+)<\/faultstring>/)?.[1] || 'Usuario o clave SOL incorrecta';
+                return { success: false, faultstring, raw: data };
+            }
+
+            // Si pasa la autenticación (incluso si SUNAT devuelve Client.0151 de archivo dummy), las credenciales son válidas
+            return {
+                success: true,
+                raw: data
+            };
+        } catch (error) {
+            const status = error.response?.status;
+            const raw = error.response?.data ? (typeof error.response.data === 'string' ? error.response.data : JSON.stringify(error.response.data)) : error.message;
+            
+            if (status === 401 || (typeof raw === 'string' && (raw.includes('Authorization Required') || raw.includes('0102')))) {
+                return {
+                    success: false,
+                    faultstring: '0102 - Usuario o clave SOL incorrecta',
+                    raw
+                };
+            }
+
+            const faultstring = typeof raw === 'string' && raw.match(/<faultstring[^>]*>([^<]+)<\/faultstring>/)?.[1];
+            
+            return {
+                success: false,
+                faultstring: faultstring || error.message || 'Error al conectar con el servidor SUNAT',
+                raw
+            };
+        }
     }
 }
 

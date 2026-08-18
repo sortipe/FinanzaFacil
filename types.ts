@@ -3,6 +3,9 @@ export enum UserRole {
   ADMIN = 'ADMIN',
   ACCOUNTANT = 'ACCOUNTANT',
   USER = 'USER',
+  CONTADOR = 'CONTADOR',
+  EMPRESARIO = 'EMPRESARIO',
+  PERSONA_NATURAL = 'PERSONA_NATURAL',
   SUB_USER = 'SUB_USER',
 }
 
@@ -20,6 +23,7 @@ export interface Company {
   businessName?: string;
   taxAddress?: string;
   dni?: string;
+  isPersonaNatural?: boolean;
   solUser?: string;
   solPass?: string;
   sunatToken?: string;
@@ -51,6 +55,20 @@ export interface User {
   ruc?: string;
   solUser?: string;
   solPass?: string;
+  isVerified?: boolean;
+  verificationToken?: string;
+  verificationExpires?: string;
+}
+
+export interface SavedAccount {
+  userId: string;
+  subUserId?: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  profilePicture?: string;
+  accountTypeLabel?: string;
+  lastActive: number;
 }
 
 export interface TaxDocument {
@@ -61,12 +79,13 @@ export interface TaxDocument {
   name: string;
   fileUrl: string; // Base64 representation
   mimeType: string;
+  folderPath?: string; // Carpeta virtual: 'pdt/2026-06'
   uploadDate: string;
   periodMonth: string;
   periodYear: number;
-  sunatStatus?: 'PENDING' | 'SENT' | 'REJECTED' | 'INTERNO';
+  sunatStatus?: 'PENDING' | 'SENT' | 'REJECTED' | 'INTERNO' | 'BORRADO';
   sunatHash?: string;
-  documentType?: 'factura' | 'boleta' | 'nota_credito' | 'nota_debito' | 'rh';
+  documentType?: 'factura' | 'boleta' | 'nota_credito' | 'nota_debito' | 'rh' | 'ticket' | 'nota_venta' | 'guia_remision' | 'guia_transportista' | 'liquidacion_compra' | 'proforma' | 'cotizacion' | 'orden_pago';
   originalDocumentId?: string;
   // Origen del documento: 'ACCOUNTANT' (subido por el contador) | 'USER' (emitido/archivado por el usuario)
   uploadedBy?: 'ACCOUNTANT' | 'USER';
@@ -75,15 +94,20 @@ export interface TaxDocument {
   cdrUrl?: string;
   xmlContent?: string;
   cdrBase64?: string;
+  convertedToDocId?: string;
+  convertedDocType?: string;
   // Metadata for receipts emitted by the app
   metadata?: {
     recipientName: string;
     recipientRuc: string;
+    recipientPhone?: string;
     description: string;
     amount: number;
     retention: number;
     netAmount: number;
     date: string;
+    items?: InvoiceItem[];
+    convertedToDocId?: string;
   };
 }
 
@@ -117,6 +141,7 @@ export interface PendingInvoice {
   customerDocType: string;
   customerDocNumber: string;
   customerName: string;
+  customerPhone?: string;
   amount: number;
   createdAt: string;
   lastAttempt: string;
@@ -172,6 +197,8 @@ export interface SubscriptionPackage {
   durationMonths: number;
   features: string[];
   type?: 'CLIENT' | 'ACCOUNTANT';
+  limits?: Record<string, Record<string, number>>;
+  isFree?: boolean;
 }
 
 export interface PaymentMethod {
@@ -215,4 +242,49 @@ export interface Complaint {
   description: string;
   detail: string;
   status: 'PENDIENTE' | 'ATENDIDO';
+}
+
+export type PaymentAlertCategory = 'LUZ' | 'AGUA' | 'INTERNET' | 'PRESTAMO' | 'ALQUILER' | 'TARJETA' | 'IMPUESTOS' | 'OTRO';
+export type PaymentAlertFrequency = 'MENSUAL' | 'QUINCENAL' | 'ANUAL' | 'UNICO';
+export type PaymentAlertStatus = 'PENDIENTE' | 'PAGADO' | 'VENCIDO';
+
+export interface PaymentAlert {
+  id: string;
+  userId: string;
+  companyId?: string;
+  title: string;
+  category: PaymentAlertCategory;
+  amount: number;
+  currency: string;
+  dueDate: string;
+  frequency: PaymentAlertFrequency;
+  reminderDaysBefore: number;
+  status: PaymentAlertStatus;
+  notes?: string;
+  lastPaidDate?: string;
+  createdAt?: string;
+}
+
+export type PersonalExpenseCategory = 
+  | 'ALIMENTACION' 
+  | 'SERVICIOS_HOGAR' 
+  | 'VIVIENDA' 
+  | 'SALUD' 
+  | 'EDUCACION' 
+  | 'ENTRETENIMIENTO' 
+  | 'TRANSPORTE' 
+  | 'OTROS_PERSONALES';
+
+export interface PersonalExpense {
+  id: string;
+  userId: string;
+  concept: PersonalExpenseCategory;
+  description: string;
+  amount: number;
+  currency: string;
+  date: string;
+  voucherUrl?: string;
+  merchantName?: string;
+  notes?: string;
+  createdAt?: string;
 }

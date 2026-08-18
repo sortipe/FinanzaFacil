@@ -1,11 +1,13 @@
 import React, { useState, useRef } from 'react';
 import { useStore } from '../context/StoreContext';
 import { SubscriptionStatus, UserRole } from '../types';
-import { Check, Smartphone, CheckCircle, QrCode, Calendar, Clock, Upload, X, AlertCircle } from 'lucide-react';
+import { Check, Smartphone, CheckCircle, QrCode, Calendar, Clock, Upload, X, AlertCircle, Headphones } from 'lucide-react';
 import { fileToBase64, compressImageFile } from '../services/geminiService';
+import { formatImageUrl } from '../utils/imageUtils';
+import { generarLinkSoportePago } from '../utils/whatsapp';
 
 export const Payment: React.FC = () => {
-  const { packages, accountantPackages, paymentMethods, currentUser, updateUser, addNotification, addSubscriptionRecord } = useStore();
+  const { packages, accountantPackages, paymentMethods, currentUser, updateUser, addNotification, addSubscriptionRecord, subscriptionHistory, sunatGlobalConfig } = useStore();
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -16,8 +18,8 @@ export const Payment: React.FC = () => {
 
   if (!currentUser) return null;
 
-  const isAccountant = currentUser.role === UserRole.ACCOUNTANT;
-  const availablePackages = isAccountant ? accountantPackages : packages;
+  const isAccountant = currentUser.role === UserRole.ACCOUNTANT || currentUser.role === UserRole.CONTADOR;
+  const availablePackages = (isAccountant ? accountantPackages : packages).filter(p => !p.isFree && !p.id.includes('free') && p.price > 0);
 
   const handleVoucherUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -106,10 +108,29 @@ export const Payment: React.FC = () => {
   }
   
   const activePaymentMethod = paymentMethods.find(pm => pm.id === selectedMethod);
+  const lastRejectedRec = subscriptionHistory.filter(s => s.userId === currentUser?.id && s.status === 'CANCELLED').pop();
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-4xl mx-auto space-y-12">
+      <div className="max-w-4xl mx-auto space-y-8">
+        {lastRejectedRec && (
+          <div className="bg-red-50 border-2 border-red-200 p-5 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm animate-fade-in">
+            <div className="flex items-center gap-3 text-red-800">
+              <AlertCircle className="w-6 h-6 text-red-600 shrink-0" />
+              <div>
+                <p className="text-xs font-black uppercase tracking-tight">Tu última solicitud para {lastRejectedRec.packageName} fue rechazada</p>
+                <p className="text-[11px] font-medium opacity-90 mt-0.5">¿Tuviste algún problema con tu transferencia o comprobante? Comunícate con soporte para resolverlo.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => window.open(generarLinkSoportePago({ packageName: lastRejectedRec.packageName, amount: lastRejectedRec.amount, userName: currentUser.name, userEmail: currentUser.email, supportPhone: sunatGlobalConfig.supportPhone }), '_blank')}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 shrink-0 shadow-md"
+            >
+              <Headphones className="w-4 h-4" /> Hablar con Soporte
+            </button>
+          </div>
+        )}
+
         <div className="text-center">
           <h2 className="text-3xl font-extrabold text-gray-900">Elige tu Plan</h2>
           <p className="mt-4 text-xl text-gray-500">{isAccountant ? 'Activa tu cuenta de contador en FinanzaFacil' : 'Desbloquea todas las funciones de FinanzaFacil'}</p>
@@ -181,7 +202,7 @@ export const Payment: React.FC = () => {
                     <div className="flex flex-col items-center p-4 bg-gray-50 rounded-xl border border-dashed border-gray-300">
                         <p className="text-sm font-bold text-gray-700 mb-2">Escanea el código para pagar</p>
                         <img 
-                            src={`data:image/jpeg;base64,${activePaymentMethod.qrImage}`} 
+                            src={formatImageUrl(activePaymentMethod.qrImage)} 
                             alt={`QR ${activePaymentMethod.name}`} 
                             className="w-48 h-48 object-contain rounded-lg shadow-sm bg-white"
                         />
@@ -196,6 +217,7 @@ export const Payment: React.FC = () => {
                 {/* ADJUNTAR VOUCHER */}
                 <div className="flex flex-col items-center max-w-md mx-auto space-y-3">
                   <input
+                    id="voucher-file-input"
                     type="file"
                     ref={fileInputRef}
                     onChange={handleVoucherUpload}
@@ -206,7 +228,7 @@ export const Payment: React.FC = () => {
                   {voucherImage ? (
                     <div className="relative border-2 border-green-500 rounded-2xl p-2 bg-green-50/50 w-full flex items-center gap-3">
                       <img
-                        src={`data:image/jpeg;base64,${voucherImage}`}
+                        src={formatImageUrl(voucherImage)}
                         alt="Comprobante de pago"
                         className="w-16 h-16 object-cover rounded-xl border border-green-200 shadow-sm"
                       />
@@ -223,14 +245,13 @@ export const Payment: React.FC = () => {
                       </button>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="w-full py-4 px-6 border-2 border-dashed border-brand-300 hover:border-brand-500 bg-brand-50/30 hover:bg-brand-50 rounded-2xl flex items-center justify-center gap-3 text-brand-700 font-black text-xs uppercase tracking-wider transition group shadow-sm"
+                    <label
+                      htmlFor="voucher-file-input"
+                      className="w-full py-4 px-6 border-2 border-dashed border-brand-300 hover:border-brand-500 bg-brand-50/30 hover:bg-brand-50 rounded-2xl flex items-center justify-center gap-3 text-brand-700 font-black text-xs uppercase tracking-wider transition group shadow-sm cursor-pointer"
                     >
                       <Upload className="w-5 h-5 text-brand-600 group-hover:scale-110 transition" />
                       Adjuntar Comprobante de Pago (Obligatorio)
-                    </button>
+                    </label>
                   )}
 
                   {uploadError && (

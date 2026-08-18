@@ -27,7 +27,7 @@ const db = require('./db');
         cert_pass VARCHAR(255),
         serie_factura VARCHAR(10),
         serie_boleta VARCHAR(10),
-        sunat_env VARCHAR(20) DEFAULT 'PRODUCTION',
+        sunat_env VARCHAR(20) DEFAULT 'SANDBOX',
         assigned_accountant_id VARCHAR(50),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -65,7 +65,7 @@ const db = require('./db');
              u.ruc || null, u.business_name || null, u.tax_address || null, u.dni || null,
              u.sol_user || null, u.sol_pass || null, u.sunat_token || null, u.sunat_api_url || null,
              u.cert_base64 || null, u.cert_pass || null, u.serie_factura || null, u.serie_boleta || null,
-             u.sunat_env || 'PRODUCTION', u.assigned_accountant_id || null]
+             u.sunat_env || 'SANDBOX', u.assigned_accountant_id || null]
           );
           await db.query('UPDATE expenses SET company_id=? WHERE user_id=? AND company_id IS NULL', [cid, u.id]).catch(() => {});
           await db.query('UPDATE tax_documents SET company_id=? WHERE user_id=? AND company_id IS NULL', [cid, u.id]).catch(() => {});

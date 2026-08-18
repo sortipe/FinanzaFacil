@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { Loader2 } from 'lucide-react';
 import { StoreProvider, useStore } from './context/StoreContext';
 import { Auth } from './pages/Auth';
 import { Layout } from './components/Layout';
@@ -8,11 +9,14 @@ import { AccountantDashboard } from './pages/AccountantDashboard';
 import { Payment } from './pages/Payment';
 import { UserRole, SubscriptionStatus } from './types';
 
+const isUserRole = (r?: UserRole) => r === UserRole.USER || r === UserRole.EMPRESARIO || r === UserRole.PERSONA_NATURAL;
+const isAccountantRole = (r?: UserRole) => r === UserRole.ACCOUNTANT || r === UserRole.CONTADOR;
+
 const MainApp: React.FC = () => {
-  const { currentUser, updateUser, logout, companies, users } = useStore();
+  const { currentUser, updateUser, logout, companies, users, loading } = useStore();
 
   useEffect(() => {
-    if ((currentUser?.role === UserRole.USER || currentUser?.role === UserRole.ACCOUNTANT) && currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE && currentUser.subscriptionEndDate) {
+    if ((isUserRole(currentUser?.role) || isAccountantRole(currentUser?.role)) && currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE && currentUser.subscriptionEndDate) {
       const today = new Date().toISOString().split('T')[0];
       if (currentUser.subscriptionEndDate < today) {
         updateUser(currentUser.id, { subscriptionStatus: SubscriptionStatus.EXPIRED });
@@ -24,13 +28,29 @@ const MainApp: React.FC = () => {
     return <Auth />;
   }
 
+  // Don't evaluate subscription/inheritance routing while the store is still
+  // hydrating. If we render Payment here before the async init completes, users
+  // who have an inherited/active subscription (resolvable only once `companies`
+  // and `users` finish loading) briefly see the "planes" screen, then it
+  // disappears — the reported flicker.
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex items-center gap-3 text-slate-600">
+          <Loader2 className="w-8 h-8 text-amber-500 animate-spin" />
+          <span className="text-sm font-black uppercase tracking-widest">Cargando...</span>
+        </div>
+      </div>
+    );
+  }
+
   // Check own subscription
   const hasOwnSubscription = currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE;
 
   // For USER role: check if accountant has active subscription (inheritance)
   // For ACCOUNTANT role: check if any client USER has active subscription (inheritance)
   let hasInheritedSubscription = false;
-  if (currentUser.role === UserRole.USER) {
+  if (isUserRole(currentUser.role)) {
     const clientCompanies = companies.filter(c => c.ownerUserId === currentUser.id);
     const accountantId = clientCompanies.find(c => c.assignedAccountantId)?.assignedAccountantId;
     if (accountantId) {
@@ -39,12 +59,12 @@ const MainApp: React.FC = () => {
         hasInheritedSubscription = true;
       }
     }
-  } else if (currentUser.role === UserRole.ACCOUNTANT) {
+  } else if (isAccountantRole(currentUser.role)) {
     // Find all companies where this accountant is assigned
     const assignedCompanies = companies.filter(c => c.assignedAccountantId === currentUser.id);
     // Check if ANY of those company owners has an active subscription
     for (const comp of assignedCompanies) {
-      const owner = users.find(u => u.id === comp.ownerUserId && u.role === UserRole.USER);
+      const owner = users.find(u => u.id === comp.ownerUserId && isUserRole(u.role));
       if (owner && owner.subscriptionStatus === SubscriptionStatus.ACTIVE) {
         hasInheritedSubscription = true;
         break;
@@ -61,28 +81,16 @@ const MainApp: React.FC = () => {
       case UserRole.ADMIN:
         return <AdminDashboard />;
       case UserRole.ACCOUNTANT:
-        if (needsSubscription) return <Payment />;
+      case UserRole.CONTADOR:
         return <AccountantDashboard />;
       case UserRole.USER:
-        if (needsSubscription) return <Payment />;
+      case UserRole.EMPRESARIO:
+      case UserRole.PERSONA_NATURAL:
         return <UserDashboard />;
       default:
         return <div>Rol desconocido</div>;
     }
   };
-
-  if (needsSubscription && (currentUser.role === UserRole.USER || currentUser.role === UserRole.ACCOUNTANT)) {
-    return (
-        <>
-            <div className="fixed top-0 right-0 p-6 z-50">
-                <button onClick={logout} className="px-5 py-2.5 bg-white border-2 border-gray-200 text-gray-500 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-red-50 hover:text-red-600 hover:border-red-100 transition shadow-sm flex items-center gap-1.5">
-                    Salir
-                </button>
-            </div>
-            <Payment />
-        </>
-    );
-  }
 
   return (
     <Layout>

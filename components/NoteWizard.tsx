@@ -1,15 +1,18 @@
 
 import React, { useState, useMemo } from 'react';
 import { X, ChevronRight, ChevronLeft, FileText, Search, CheckCircle, AlertTriangle } from 'lucide-react';
-import { TaxDocument, NC_MOTIVOS, ND_MOTIVOS, NcNdMotivo } from '../types';
+import { TaxDocument, NC_MOTIVOS, ND_MOTIVOS, NcNdMotivo, Company } from '../types';
 import { useStore } from '../context/StoreContext';
 import { sunatService } from '../services/sunatService';
+import { allocateNextCorrelative } from '../src/services/api';
 
 interface NoteWizardProps {
   isOpen: boolean;
   onClose: () => void;
   onEmitted: (doc: TaxDocument) => void;
   initialType?: 'nota_credito' | 'nota_debito';
+  company?: Company;
+  accountantId?: string;
 }
 
 interface NoteData {
@@ -22,10 +25,14 @@ interface NoteData {
   currency: 'PEN' | 'USD';
   issueDate: string;
   description: string;
+  customerPhone?: string;
 }
 
-export default function NoteWizard({ isOpen, onClose, onEmitted, initialType = 'nota_credito' }: NoteWizardProps) {
+export default function NoteWizard({ isOpen, onClose, onEmitted, initialType = 'nota_credito', company, accountantId }: NoteWizardProps) {
   const { currentUser, selectedCompany, taxDocuments, expenses, pendingInvoices, addPendingInvoice, sunatGlobalConfig } = useStore();
+  const effectiveCompany = company ?? selectedCompany;
+  const accountId = accountantId ?? '';
+  const isAccountantMode = !!accountantId;
 
   const [step, setStep] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
@@ -40,6 +47,7 @@ export default function NoteWizard({ isOpen, onClose, onEmitted, initialType = '
     currency: 'PEN',
     issueDate: new Date().toISOString().split('T')[0],
     description: '',
+    customerPhone: '',
   });
   const [isEmitting, setIsEmitting] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -63,12 +71,32 @@ export default function NoteWizard({ isOpen, onClose, onEmitted, initialType = '
     return undefined;
   };
 
+  const getDocCustomerRuc = (doc: TaxDocument): string => {
+    if (doc.metadata?.recipientRuc) return doc.metadata.recipientRuc;
+    if (doc.xmlContent) {
+      const match = doc.xmlContent.match(/<cac:AccountingCustomerParty>[\s\S]*?<cbc:ID[^>]*>([^<]+)<\/cbc:ID>/i);
+      if (match?.[1]) return match[1].trim();
+    }
+    return '';
+  };
+
+  const getDocCustomerName = (doc: TaxDocument): string => {
+    if (doc.metadata?.recipientName) return doc.metadata.recipientName;
+    if (doc.xmlContent) {
+      const match = doc.xmlContent.match(/<cac:AccountingCustomerParty>[\s\S]*?<cbc:RegistrationName>([^<]+)<\/cbc:RegistrationName>/i);
+      if (match?.[1]) return match[1].trim();
+    }
+    return '';
+  };
+
   // Filter eligible documents (facturas y boletas aceptadas o enviadas)
   const eligibleDocs = useMemo(() => {
     return taxDocuments.filter(d =>
-      (d.sunatStatus === 'SENT' || d.sunatStatus === 'ACEPTADO') && (d.id.startsWith('F') || d.id.startsWith('B'))
+      (d.sunatStatus === 'SENT' || d.sunatStatus === 'ACEPTADO') && (d.id.startsWith('F') || d.id.startsWith('B')) &&
+      (!effectiveCompany || d.companyId === effectiveCompany.id) &&
+      (d.userId === currentUser?.id)
     );
-  }, [taxDocuments]);
+  }, [taxDocuments, effectiveCompany, currentUser]);
 
   const filteredDocs = useMemo(() => {
     if (!searchQuery) return eligibleDocs;
@@ -76,132 +104,163 @@ export default function NoteWizard({ isOpen, onClose, onEmitted, initialType = '
     return eligibleDocs.filter(d =>
       d.name?.toLowerCase().includes(q) ||
       d.id.toLowerCase().includes(q) ||
-      d.metadata?.recipientName?.toLowerCase().includes(q) ||
-      d.metadata?.recipientRuc?.includes(q)
+      getDocCustomerName(d).toLowerCase().includes(q) ||
+      getDocCustomerRuc(d).includes(q)
     );
   }, [eligibleDocs, searchQuery]);
 
-  const generateNoteId = () => {
-    const prefix = isCredit
-      ? (selectedOriginalDoc?.id.startsWith('B') ? 'BC' : 'FC')
-      : (selectedOriginalDoc?.id.startsWith('B') ? 'BD' : 'FD');
-    const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
-    const today = new Date();
-    const serie = `${prefix}${(today.getMonth() + 1).toString().padStart(2, '0')}`;
-    return `${serie}-${random}`;
-  };
+  // La serie de una nota es la del comprobante original (F001/B001), válida ante SUNAT.
+  // El correlativo se reserva en el servidor (secuencia compartida por empresa + serie).
+  const originalSerie = (selectedOriginalDoc?.id || '').split('-')[0] || '';
 
   const handleSelectDoc = (doc: TaxDocument) => {
     setSelectedOriginalDoc(doc);
     const docAmount = getDocAmount(doc) || 0;
+    const rawDocId = doc.name?.replace(/.*?(\w+-\d+)$/, '$1') || doc.id;
+    const cleanDocId = rawDocId.replace(/^BB([0-9]{3}-)/i, 'B$1').replace(/^FF([0-9]{3}-)/i, 'F$1');
     setNoteData(prev => ({
       ...prev,
-      originalDocId: doc.name?.replace(/.*?(\w+-\d+)$/, '$1') || doc.id,
+      originalDocId: cleanDocId,
       originalDocDate: doc.metadata?.date || doc.uploadDate,
       amount: docAmount > 0 ? docAmount : prev.amount,
-      customerName: doc.metadata?.recipientName || '',
+      customerName: getDocCustomerName(doc),
+      customerPhone: doc.metadata?.recipientPhone || '',
     }));
     setStep(1);
   };
 
   const handleEmit = async () => {
-    if (!selectedCompany || !currentUser) return;
+    if (!effectiveCompany || !currentUser) return;
     setIsEmitting(true);
+    setResult(null);
 
     try {
-      const noteId = generateNoteId();
+      if (!selectedOriginalDoc) {
+        setResult({ success: false, message: 'Selecciona el documento original para emitir la nota.' });
+        setStep(3);
+        return;
+      }
+
+      // Serie del documento original (F001/B001) — solo series SUNAT válidas
+      const docSerie = (selectedOriginalDoc.id || '').split('-')[0] || '';
+      if (!/^[FB][0-9]{3}$/.test(docSerie)) {
+        setResult({ success: false, message: `El documento original tiene serie inválida (${docSerie}). No se puede emitir la nota.` });
+        setStep(3);
+        return;
+      }
+
+      const customerRuc = getDocCustomerRuc(selectedOriginalDoc);
+      const customerName = getDocCustomerName(selectedOriginalDoc);
+      if (!customerRuc || !customerName) {
+        setResult({ success: false, message: 'El documento original no tiene los datos del cliente (RUC y nombre). No se puede emitir la nota.' });
+        setStep(3);
+        return;
+      }
+
+      // Reservar correlativo secuencial en el servidor (compartido con facturas de la misma serie)
+      const alloc = await allocateNextCorrelative(effectiveCompany.id, docSerie);
+      const nextCorr = Number(alloc?.next) || 1;
+      const noteId = `${docSerie}-${String(nextCorr).padStart(8, '0')}`;
+
       const credentials = {
-        ruc: selectedCompany.ruc,
-        user: selectedCompany.solUser,
-        pass: selectedCompany.solPass,
-        certBase64: selectedCompany.certBase64,
-        certPass: selectedCompany.certPass,
-        emitterName: selectedCompany.businessName || selectedCompany.name,
-        env: selectedCompany.sunatEnv || 'PRODUCTION',
+        ruc: effectiveCompany.ruc,
+        user: effectiveCompany.solUser,
+        pass: effectiveCompany.solPass,
+        certBase64: effectiveCompany.certBase64,
+        certPass: effectiveCompany.certPass,
+        emitterName: effectiveCompany.businessName || effectiveCompany.name,
+        env: effectiveCompany.sunatEnv || 'SANDBOX',
       };
 
+      const validIssueDate = noteData.issueDate || new Date().toISOString().split('T')[0];
       const data = {
         id: noteId,
-        date: noteData.issueDate,
+        serie: docSerie,
+        issueDate: validIssueDate,
+        date: validIssueDate,
         currency: noteData.currency,
         total: noteData.amount,
         originalDocId: noteData.originalDocId,
         originalDocDate: noteData.originalDocDate,
         reasonCode: noteData.reasonCode,
         reasonDescription: noteData.reasonDescription,
-        customerRuc: selectedOriginalDoc?.metadata?.recipientRuc || '',
-        customerName: selectedOriginalDoc?.metadata?.recipientName || '',
+        customerRuc,
+        customerName,
+        customerPhone: noteData.customerPhone,
         items: [{ description: noteData.description || noteData.reasonDescription, quantity: 1, unitPrice: noteData.amount }],
       };
 
+      const apiUrl = effectiveCompany.sunatApiUrl || '';
       let response;
       if (noteData.noteType === 'nota_credito') {
-        response = await sunatService.emitirNotaCredito(data, selectedCompany.sunatToken || '', selectedCompany.sunatApiUrl || 'http://localhost:5555', credentials);
+        response = await sunatService.emitirNotaCredito(data, effectiveCompany.sunatToken || '', apiUrl, credentials);
       } else {
-        response = await sunatService.emitirNotaDebito(data, selectedCompany.sunatToken || '', selectedCompany.sunatApiUrl || 'http://localhost:5555', credentials);
+        response = await sunatService.emitirNotaDebito(data, effectiveCompany.sunatToken || '', apiUrl, credentials);
       }
 
-      const doc: TaxDocument = {
-        id: `${noteData.noteType === 'nota_credito' ? 'NC' : 'ND'}-${Date.now()}`,
-        userId: currentUser.id,
-        companyId: selectedCompany.id,
-        accountantId: '',
-        name: `${noteData.noteType === 'nota_credito' ? 'N. Crédito' : 'N. Débito'} ${noteId}`,
-        fileUrl: '',
-        mimeType: 'application/xml',
-        uploadDate: noteData.issueDate,
-        periodMonth: new Date(noteData.issueDate).toLocaleString('es', { month: 'long' }),
-        periodYear: new Date(noteData.issueDate).getFullYear(),
-        sunatStatus: response.success ? 'SENT' : 'REJECTED',
-        documentType: noteData.noteType,
-        originalDocumentId: selectedOriginalDoc?.id,
-        uploadedBy: 'USER',
-        xmlContent: response.xmlContent,
-        cdrBase64: response.cdrBase64,
-        metadata: {
-          recipientName: selectedOriginalDoc?.metadata?.recipientName || '',
-          recipientRuc: selectedOriginalDoc?.metadata?.recipientRuc || '',
-          description: noteData.description || noteData.reasonDescription,
-          amount: noteData.amount,
-          retention: 0,
-          netAmount: noteData.amount / 1.18,
-          date: noteData.issueDate,
-        },
-      };
-
-      if (!response.success) {
+      if (response.success) {
+        const doc: TaxDocument = {
+          id: `${noteData.noteType === 'nota_credito' ? 'NC' : 'ND'}-${Date.now()}`,
+          userId: effectiveCompany.ownerUserId,
+          companyId: effectiveCompany.id,
+          accountantId: accountId,
+          name: `${noteData.noteType === 'nota_credito' ? 'N. Crédito' : 'N. Débito'} ${noteId}`,
+          fileUrl: '',
+          mimeType: 'application/xml',
+          uploadDate: validIssueDate,
+          periodMonth: new Date(validIssueDate).toLocaleString('es', { month: 'long' }),
+          periodYear: new Date(validIssueDate).getFullYear(),
+          sunatStatus: 'SENT',
+          documentType: noteData.noteType,
+          originalDocumentId: selectedOriginalDoc.id,
+          uploadedBy: isAccountantMode ? 'ACCOUNTANT' : 'USER',
+          xmlContent: response.xmlContent,
+          cdrBase64: response.cdrBase64,
+          metadata: {
+            recipientName: customerName,
+            recipientRuc: customerRuc,
+            description: noteData.description || noteData.reasonDescription,
+            amount: noteData.amount,
+            retention: 0,
+            netAmount: noteData.amount / 1.18,
+            date: validIssueDate,
+          },
+        };
+        onEmitted(doc);
+        setResult({
+          success: true,
+          message: `${noteData.noteType === 'nota_credito' ? 'Nota de Crédito' : 'Nota de Débito'} emitida correctamente (${noteId}).`,
+        });
+      } else {
         const pendingInvoice = {
           id: `pending-${Date.now()}`,
-          userId: currentUser.id,
-          companyId: selectedCompany.id,
-          serie: noteId.split('-')[0],
-          correlative: parseInt(noteId.split('-')[1] || '0'),
+          userId: effectiveCompany.ownerUserId,
+          companyId: effectiveCompany.id,
+          serie: docSerie,
+          correlative: nextCorr,
           documentType: noteData.noteType,
-          originalDocumentId: selectedOriginalDoc?.id,
+          originalDocumentId: selectedOriginalDoc.id,
           payload: data,
-          customerDocType: selectedOriginalDoc?.metadata?.recipientRuc?.length === 8 ? 'DNI' : 'RUC',
-          customerDocNumber: selectedOriginalDoc?.metadata?.recipientRuc || '',
-          customerName: selectedOriginalDoc?.metadata?.recipientName || '',
+          customerDocType: customerRuc.length === 8 ? 'DNI' : 'RUC',
+          customerDocNumber: customerRuc,
+          customerName,
+          customerPhone: noteData.customerPhone,
           amount: noteData.amount,
-          createdAt: noteData.issueDate,
-          lastAttempt: noteData.issueDate,
+          createdAt: validIssueDate,
+          lastAttempt: validIssueDate,
           attemptCount: 0,
-          status: 'PENDIENTE',
+          status: 'PENDIENTE' as const,
           lastError: response.error,
         };
         addPendingInvoice(pendingInvoice);
+        setResult({
+          success: false,
+          message: `Error: ${response.error || 'No se pudo conectar con SUNAT'}. Guardado en Pendientes SUNAT para reintento.`,
+        });
       }
-
-      onEmitted(doc);
-      setResult({
-        success: response.success,
-        message: response.success
-          ? `${isCredit ? 'Nota de Crédito' : 'Nota de Débito'} emitida correctamente`
-          : `Error: ${response.error}. Guardado para reintento.`,
-      });
       setStep(3);
-    } catch (error) {
-      setResult({ success: false, message: 'Error al emitir la nota' });
+    } catch (error: any) {
+      setResult({ success: false, message: `Error al emitir la nota: ${error?.message || 'Desconocido'}` });
       setStep(3);
     } finally {
       setIsEmitting(false);
@@ -295,7 +354,7 @@ export default function NoteWizard({ isOpen, onClose, onEmitted, initialType = '
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-black text-gray-800">{doc.name}</p>
                           <p className="text-[10px] text-gray-500">
-                            {doc.metadata?.recipientName} • RUC: {doc.metadata?.recipientRuc}
+                            {getDocCustomerName(doc) || 'Sin nombre'} • RUC: {getDocCustomerRuc(doc) || 'Sin RUC'}
                           </p>
                           <p className="text-[10px] text-gray-400">
                             Fecha: {doc.metadata?.date || doc.uploadDate}
@@ -407,7 +466,7 @@ export default function NoteWizard({ isOpen, onClose, onEmitted, initialType = '
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-black text-gray-800">{selectedOriginalDoc.name}</p>
-                      <p className="text-[11px] text-gray-500">{selectedOriginalDoc.metadata?.recipientName} • RUC: {selectedOriginalDoc.metadata?.recipientRuc}</p>
+                      <p className="text-[11px] text-gray-500">{getDocCustomerName(selectedOriginalDoc) || 'Sin nombre'} • RUC: {getDocCustomerRuc(selectedOriginalDoc) || 'Sin RUC'}</p>
                     </div>
                     <div className="text-right">
                       {getDocAmount(selectedOriginalDoc) ? (
@@ -422,6 +481,19 @@ export default function NoteWizard({ isOpen, onClose, onEmitted, initialType = '
                   </div>
                 </div>
               )}
+              
+              <div>
+                <label className="text-[10px] font-black text-gray-400 uppercase block mb-1">Celular del cliente (opcional)</label>
+                <input type="tel" placeholder="987654321" maxLength={9}
+                  className={`
+                    w-full bg-gray-50 border-2 p-3 rounded-xl text-sm text-gray-900 outline-none focus:border-brand-600 focus:bg-white uppercase
+                    ${noteData.customerPhone && !/^9\d{8}$/.test(noteData.customerPhone) ? 'border-amber-400 bg-amber-50' : 'border-gray-200'}
+                  `}
+                  value={noteData.customerPhone} onChange={e => setNoteData(p => ({ ...p, customerPhone: e.target.value.replace(/\D/g, '').slice(0, 9) }))} />
+                {noteData.customerPhone && !/^9\d{8}$/.test(noteData.customerPhone) && (
+                  <p className="text-[9px] font-bold text-amber-600 mt-1">Formato: 9XXXXXXXX (9 dígitos)</p>
+                )}
+              </div>
             </div>
           )}
 

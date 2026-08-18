@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS companies (
   business_name VARCHAR(255),
   tax_address TEXT,
   dni VARCHAR(8),
+  is_persona_natural TINYINT(1) DEFAULT 0,
   sol_user VARCHAR(255),
   sol_pass VARCHAR(255),
   sunat_token TEXT,
@@ -34,10 +35,12 @@ CREATE TABLE IF NOT EXISTS companies (
   cert_pass VARCHAR(255),
   serie_factura VARCHAR(10),
   serie_boleta VARCHAR(10),
-  sunat_env VARCHAR(20) DEFAULT 'PRODUCTION',
+  sunat_env VARCHAR(20) DEFAULT 'SANDBOX',
   assigned_accountant_id VARCHAR(50),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT chk_serie_factura CHECK (serie_factura IS NULL OR serie_factura REGEXP '^F[0-9]{3}$'),
+  CONSTRAINT chk_serie_boleta CHECK (serie_boleta IS NULL OR serie_boleta REGEXP '^B[0-9]{3}$'),
   FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -65,11 +68,12 @@ CREATE TABLE IF NOT EXISTS expenses (
 CREATE TABLE IF NOT EXISTS tax_documents (
   id VARCHAR(50) PRIMARY KEY,
   user_id VARCHAR(50) NOT NULL,
-  company_id VARCHAR(50),
+  company_id VARCHAR(50) NOT NULL,
   accountant_id VARCHAR(50),
   name VARCHAR(255),
   file_url LONGTEXT,
   mime_type VARCHAR(100),
+  folder_path VARCHAR(255),
   upload_date VARCHAR(10),
   period_month VARCHAR(20),
   period_year INT,
@@ -86,7 +90,7 @@ CREATE TABLE IF NOT EXISTS tax_documents (
   metadata JSON,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS packages (
@@ -96,7 +100,9 @@ CREATE TABLE IF NOT EXISTS packages (
   duration_months INT NOT NULL,
   features JSON,
   type VARCHAR(20) DEFAULT 'CLIENT',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  limits JSON DEFAULT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  deleted_at DATETIME DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS payment_methods (
@@ -156,7 +162,7 @@ CREATE TABLE IF NOT EXISTS user_products (
 CREATE TABLE IF NOT EXISTS pending_invoices (
   id VARCHAR(50) PRIMARY KEY,
   user_id VARCHAR(50) NOT NULL,
-  company_id VARCHAR(50),
+  company_id VARCHAR(50) NOT NULL,
   serie VARCHAR(10),
   correlative INT,
   document_type VARCHAR(20),
@@ -171,8 +177,9 @@ CREATE TABLE IF NOT EXISTS pending_invoices (
   attempt_count INT DEFAULT 0,
   status VARCHAR(20) DEFAULT 'PENDIENTE',
   last_error TEXT,
+  CONSTRAINT chk_pi_serie CHECK (serie IS NULL OR serie REGEXP '^[FB][0-9]{3}$'),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sunat_global_config (
@@ -190,6 +197,49 @@ CREATE TABLE IF NOT EXISTS notifications (
   is_read TINYINT(1) DEFAULT 0,
   type VARCHAR(20) DEFAULT 'SYSTEM',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS correlativos (
+  company_id VARCHAR(50) NOT NULL,
+  serie VARCHAR(10) NOT NULL,
+  last_used INT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (company_id, serie),
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS payment_alerts (
+  id VARCHAR(50) PRIMARY KEY,
+  user_id VARCHAR(50) NOT NULL,
+  company_id VARCHAR(50),
+  title VARCHAR(255) NOT NULL,
+  category VARCHAR(50) NOT NULL DEFAULT 'OTRO',
+  amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  currency VARCHAR(10) NOT NULL DEFAULT 'PEN',
+  due_date VARCHAR(10) NOT NULL,
+  frequency VARCHAR(20) NOT NULL DEFAULT 'MENSUAL',
+  reminder_days_before INT NOT NULL DEFAULT 3,
+  status VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
+  notes TEXT,
+  last_paid_date VARCHAR(10),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS personal_expenses (
+  id VARCHAR(50) PRIMARY KEY,
+  user_id VARCHAR(50) NOT NULL,
+  concept VARCHAR(50) NOT NULL DEFAULT 'OTROS_PERSONALES',
+  description TEXT,
+  amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  currency VARCHAR(10) NOT NULL DEFAULT 'PEN',
+  date VARCHAR(10) NOT NULL,
+  voucher_url LONGTEXT,
+  merchant_name VARCHAR(255),
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 `;
 
@@ -243,6 +293,18 @@ const ALTER_AND_MIGRATE = async () => {
     }
   }
 
+  // --- Verification token columns ---
+  if (!(await columnExists('users', 'is_verified'))) {
+    await db.query(`ALTER TABLE users ADD COLUMN is_verified TINYINT(1) DEFAULT 0`).catch(() => {});
+    await db.query(`UPDATE users SET is_verified = 1`).catch(() => {});
+  }
+  if (!(await columnExists('users', 'verification_token'))) {
+    await db.query(`ALTER TABLE users ADD COLUMN verification_token VARCHAR(255)`).catch(() => {});
+  }
+  if (!(await columnExists('users', 'verification_expires'))) {
+    await db.query(`ALTER TABLE users ADD COLUMN verification_expires DATETIME`).catch(() => {});
+  }
+
   // --- MIGRATION: Create default company for existing users ---
   const companiesExist = await db.query('SELECT COUNT(*) AS cnt FROM companies');
   const usersExist = await db.query("SELECT COUNT(*) AS cnt FROM users WHERE role='USER'");
@@ -262,14 +324,14 @@ const ALTER_AND_MIGRATE = async () => {
       for (const u of users) {
         const companyId = 'comp-' + u.id;
         await db.query(
-          `INSERT IGNORE INTO companies (id, owner_user_id, name, ruc, business_name, tax_address, dni, sol_user, sol_pass, sunat_token, sunat_api_url, cert_base64, cert_pass, serie_factura, serie_boleta, sunat_env, assigned_accountant_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT IGNORE INTO companies (id, owner_user_id, name, ruc, business_name, tax_address, dni, is_persona_natural, sol_user, sol_pass, sunat_token, sunat_api_url, cert_base64, cert_pass, serie_factura, serie_boleta, sunat_env, assigned_accountant_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             companyId, u.id, u.business_name || u.name || 'Mi Empresa',
-            u.ruc || null, u.business_name || null, u.tax_address || null, u.dni || null,
+            u.ruc || null, u.business_name || null, u.tax_address || null, u.dni || null, u.dni ? 1 : 0,
             u.sol_user || null, u.sol_pass || null, u.sunat_token || null, u.sunat_api_url || null,
             u.cert_base64 || null, u.cert_pass || null, u.serie_factura || null, u.serie_boleta || null,
-            u.sunat_env || 'PRODUCTION', u.assigned_accountant_id || null
+            u.sunat_env || 'SANDBOX', u.assigned_accountant_id || null
           ]
         );
 
@@ -315,10 +377,23 @@ const ALTER_AND_MIGRATE = async () => {
     console.log('Added type column to packages table.');
   }
 
-  // Add NC/ND columns to tax_documents
+  // --- Add deleted_at to packages for soft delete ---
+  if (!(await columnExists('packages', 'deleted_at'))) {
+    await db.query("ALTER TABLE packages ADD COLUMN deleted_at DATETIME DEFAULT NULL").catch(() => {});
+    console.log('Added deleted_at column to packages table.');
+  }
+
+  // --- Add is_persona_natural to companies if not exists (Persona Natural emisora) ---
+  if (!(await columnExists('companies', 'is_persona_natural'))) {
+    await db.query("ALTER TABLE companies ADD COLUMN is_persona_natural TINYINT(1) DEFAULT 0").catch(() => {});
+    console.log('Added is_persona_natural column to companies table.');
+  }
+
+  // --- Add NC/ND columns to tax_documents
   const taxDocCols = [
     ['document_type', "VARCHAR(30)"],
     ['original_document_id', "VARCHAR(50)"],
+    ['folder_path', "VARCHAR(255)"],
   ];
   for (const [col, type] of taxDocCols) {
     if (!(await columnExists('tax_documents', col))) {
@@ -330,6 +405,93 @@ const ALTER_AND_MIGRATE = async () => {
   if (!(await columnExists('pending_invoices', 'original_document_id'))) {
     await db.query("ALTER TABLE pending_invoices ADD COLUMN original_document_id VARCHAR(50)").catch(() => {});
   }
+
+  // Add limits column to packages for subscription restrictions
+  if (!(await columnExists('packages', 'limits'))) {
+    await db.query("ALTER TABLE packages ADD COLUMN limits JSON DEFAULT NULL").catch(() => {});
+    console.log('Added limits column to packages table.');
+  }
+
+  // Add is_free column to packages table
+  if (!(await columnExists('packages', 'is_free'))) {
+    await db.query("ALTER TABLE packages ADD COLUMN is_free TINYINT(1) DEFAULT 0").catch(() => {});
+    console.log('Added is_free column to packages table.');
+  }
+
+  // Add support_phone column to sunat_global_config table
+  if (!(await columnExists('sunat_global_config', 'support_phone'))) {
+    await db.query("ALTER TABLE sunat_global_config ADD COLUMN support_phone VARCHAR(50) DEFAULT '999888777'").catch(() => {});
+    console.log('Added support_phone column to sunat_global_config table.');
+  }
+
+  // Ensure default Plan Gratis for CLIENT exists
+  const freeClient = await db.query("SELECT * FROM packages WHERE (is_free = 1 OR id = 'pkg-free-client') AND type = 'CLIENT'");
+  if (freeClient.length === 0) {
+    await db.query(`INSERT INTO packages (id, name, price, duration_months, features, type, is_free, limits) VALUES (?,?,?,?,?,?,?,?)`, [
+      'pkg-free-client', 'Plan Gratis', 0, 12, JSON.stringify(['Funciones básicas', '1 Empresa', '10 Comprobantes al mes']), 'CLIENT', 1,
+      JSON.stringify({ maxCompanies: { USER: 1, PERSONA_NATURAL: 1 }, maxTaxDocuments: { USER: 10, PERSONA_NATURAL: 10 } })
+    ]).catch(() => {});
+    console.log('Created default Plan Gratis for CLIENT.');
+  }
+
+  // Ensure default Plan Gratis for ACCOUNTANT exists
+  const freeAcct = await db.query("SELECT * FROM packages WHERE (is_free = 1 OR id = 'pkg-free-accountant') AND type = 'ACCOUNTANT'");
+  if (freeAcct.length === 0) {
+    await db.query(`INSERT INTO packages (id, name, price, duration_months, features, type, is_free, limits) VALUES (?,?,?,?,?,?,?,?)`, [
+      'pkg-free-accountant', 'Plan Gratis', 0, 12, JSON.stringify(['Gestión básica de contador', 'Hasta 2 empresas gestionadas']), 'ACCOUNTANT', 1,
+      JSON.stringify({ maxManagedCompanies: { ACCOUNTANT: 2 }, maxTaxDocuments: { ACCOUNTANT: 20 } })
+    ]).catch(() => {});
+    console.log('Created default Plan Gratis for ACCOUNTANT.');
+  }
+
+  // --- HARDEN: constraints de integridad (series SUNAT, RUC único, company_id obligatorio) ---
+  const constraintExists = async (table, name) => {
+    const rows = await db.query(
+      `SELECT 1 FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?`,
+      [table, name]
+    );
+    return rows.length > 0;
+  };
+  const ensureCheck = async (table, name, expression) => {
+    if (await constraintExists(table, name)) return;
+    try {
+      await db.query(`ALTER TABLE ${table} ADD CONSTRAINT ${name} CHECK (${expression})`);
+      console.log(`  [HARDEN] CHECK ${name} agregado`);
+    } catch (e) { console.error(`  [HARDEN] No se pudo agregar CHECK ${name}: ${e.message}`); }
+  };
+  const ensureUniqueIndex = async (table, name, cols) => {
+    try {
+      await db.query(`ALTER TABLE ${table} ADD UNIQUE INDEX ${name} (${cols})`);
+      console.log(`  [HARDEN] Índice único ${name} agregado`);
+    } catch (e) { console.error(`  [HARDEN] No se pudo agregar índice único ${name}: ${e.message}`); }
+  };
+
+  await ensureCheck('companies', 'chk_serie_factura', "serie_factura IS NULL OR serie_factura REGEXP '^F[0-9]{3}$'");
+  await ensureCheck('companies', 'chk_serie_boleta', "serie_boleta IS NULL OR serie_boleta REGEXP '^B[0-9]{3}$'");
+  await ensureCheck('pending_invoices', 'chk_pi_serie', "serie IS NULL OR serie REGEXP '^[FB][0-9]{3}$'");
+  await ensureUniqueIndex('companies', 'uq_companies_ruc', 'ruc');
+
+  const hardenCompanyId = async (table) => {
+    const cols = await db.query(`SHOW COLUMNS FROM ${table} LIKE 'company_id'`);
+    if (cols.length === 0) return;
+    // Reconstruir FK como CASCADE (la BD existente no la tenía)
+    const fks = await db.query(
+      `SELECT kcu.CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE kcu
+       WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.TABLE_NAME = ? AND kcu.COLUMN_NAME = 'company_id' AND kcu.REFERENCED_TABLE_NAME = 'companies'`,
+      [table]
+    );
+    for (const fk of fks) {
+      await db.query(`ALTER TABLE ${table} DROP FOREIGN KEY ${fk.CONSTRAINT_NAME}`).catch(() => {});
+    }
+    try {
+      await db.query(`ALTER TABLE ${table} MODIFY company_id VARCHAR(50) NOT NULL`);
+    } catch (e) { console.error(`  [HARDEN] No se pudo hacer NOT NULL company_id en ${table}: ${e.message}`); }
+    await db.query(`ALTER TABLE ${table} ADD CONSTRAINT ${table}_ibfk_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE`)
+      .catch((e) => { console.error(`  [HARDEN] No se pudo agregar FK company en ${table}: ${e.message}`); });
+    console.log(`  [HARDEN] company_id endurecido en ${table}`);
+  };
+  await hardenCompanyId('tax_documents');
+  await hardenCompanyId('pending_invoices');
 };
 
 const initSchema = async () => {
@@ -344,7 +506,21 @@ const initSchema = async () => {
     }
   }
   await ALTER_AND_MIGRATE();
+  await normalizeLegacyRoles();
   console.log('Database schema initialized.');
+};
+
+// Normaliza roles legacy a los canónicos (USUARIOS registrados vía "Crear Cuenta")
+const normalizeLegacyRoles = async () => {
+  try {
+    const r1 = await db.query(`UPDATE users SET role='USER' WHERE role IN ('EMPRESARIO')`);
+    const r2 = await db.query(`UPDATE users SET role='ACCOUNTANT' WHERE role='CONTADOR'`);
+    if (r1.affectedRows > 0 || r2.affectedRows > 0) {
+      console.log(`Roles normalizados: ${r1.affectedRows} -> USER, ${r2.affectedRows} -> ACCOUNTANT`);
+    }
+  } catch (err) {
+    console.error('Error normalizando roles:', err.message);
+  }
 };
 
 module.exports = { initSchema };

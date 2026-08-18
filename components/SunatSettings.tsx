@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '../context/StoreContext';
 import { Shield, Key, FileCode, CheckCircle, AlertCircle, Upload, FileText, Search, Loader2 } from 'lucide-react';
 import { consultaService } from '../services/consultaService';
+import { getNextCorrelative, setCorrelativoBaseline } from '../src/services/api';
 
 
 const getInitialFormData = (company: any) => {
@@ -15,7 +17,7 @@ const getInitialFormData = (company: any) => {
         solPass: company?.solPass || '',
         emitterName: company?.businessName || '',
         certPass: company?.certPass || '',
-        sunatEnv: company?.sunatEnv || 'PRODUCTION',
+        sunatEnv: company?.sunatEnv || 'SANDBOX',
         serieFactura: company?.serieFactura || 'F001',
         serieBoleta: company?.serieBoleta || 'B001',
         correlativoFactura: getCorr(company?.id, company?.serieFactura || 'F001'),
@@ -24,13 +26,30 @@ const getInitialFormData = (company: any) => {
 };
 
 export const SunatSettings: React.FC = () => {
-    const { selectedCompany, selectedCompanyId, updateCompany } = useStore();
-    const [formData, setFormData] = useState(getInitialFormData(selectedCompany));
+    const { selectedCompany, selectedCompanyId, companies, currentUser, updateCompany } = useStore();
+    const activeCompany = selectedCompany || (companies.filter(c => c.ownerUserId === currentUser?.id)[0]) || null;
+    const [formData, setFormData] = useState(getInitialFormData(activeCompany));
 
-    // Sincronizar formData cuando selectedCompany cambia
+    // Sincronizar formData cuando activeCompany cambia
     useEffect(() => {
-        setFormData(getInitialFormData(selectedCompany));
-    }, [selectedCompany]);
+        setFormData(getInitialFormData(activeCompany));
+        const cid = activeCompany?.id;
+        if (!cid) return;
+        let cancelled = false;
+        const series = [
+            { key: 'correlativoFactura', serie: activeCompany?.serieFactura || 'F001' },
+            { key: 'correlativoBoleta', serie: activeCompany?.serieBoleta || 'B001' },
+        ];
+        series.forEach(({ key, serie }) => {
+            getNextCorrelative(cid, serie)
+                .then((res: any) => {
+                    if (cancelled || !res?.success) return;
+                    setFormData(prev => ({ ...prev, [key]: Number(res.last) || 0 }));
+                })
+                .catch(() => {});
+        });
+        return () => { cancelled = true; };
+    }, [activeCompany]);
 
 
 
@@ -39,24 +58,29 @@ export const SunatSettings: React.FC = () => {
     const [certName, setCertName] = useState<string | null>(selectedCompany?.certBase64 ? 'Certificado cargado' : null);
     const [tempCertBase64, setTempCertBase64] = useState<string | null>(selectedCompany?.certBase64 || null);
     const [searchingRuc, setSearchingRuc] = useState(false);
+    const [toast, setToast] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+    const toastTimer = useRef<number | null>(null);
+
+    const showToast = (type: 'error' | 'success', message: string) => {
+        if (toastTimer.current) window.clearTimeout(toastTimer.current);
+        setToast({ type, message });
+        toastTimer.current = window.setTimeout(() => setToast(null), 4000);
+    };
 
     const handleSearchRuc = async () => {
         const ruc = formData.ruc.replace(/\D/g, '');
-        if (ruc.length !== 11) { setErrorMsg('El RUC debe tener 11 dígitos'); setStatus('error'); return; }
-        setSearchingRuc(true); setErrorMsg(null); setStatus('idle');
+        if (ruc.length !== 11) { showToast('error', 'El RUC debe tener 11 dígitos'); return; }
+        setSearchingRuc(true);
         try {
             const res = await consultaService.consultarRUC(ruc);
             if (res.success && res.razonSocial) {
                 setFormData(prev => ({ ...prev, emitterName: res.razonSocial || '' }));
-                setStatus('success');
-                setTimeout(() => setStatus('idle'), 2000);
+                showToast('success', `RUC encontrado: ${res.razonSocial}`);
             } else {
-                setErrorMsg(res.error || 'No se encontró el RUC');
-                setStatus('error');
+                showToast('error', res.error || 'No se encontró el RUC');
             }
         } catch {
-            setErrorMsg('Error al consultar RUC');
-            setStatus('error');
+            showToast('error', 'Error al consultar RUC');
         } finally { setSearchingRuc(false); }
     };
 
@@ -119,15 +143,23 @@ export const SunatSettings: React.FC = () => {
                 body: JSON.stringify(serverPayload)
             });
 
-            const result = await response.json();
+            const text = await response.text();
+            let result: any = {};
+            try {
+                result = text ? JSON.parse(text) : {};
+            } catch (e) {
+                throw new Error(`Respuesta inválida del servidor (${response.status}): ${text ? text.slice(0, 150) : 'Sin respuesta'}`);
+            }
 
             if (!result.success) {
-                throw new Error(result.error || 'No se pudo conectar con SUNAT');
+                const msg = typeof result.error === 'string' ? result.error : (result.error?.message || 'No se pudo conectar con SUNAT');
+                throw new Error(msg);
             }
 
             // 2. Si es exitoso, guardar en la empresa
-            if (selectedCompanyId) {
-                updateCompany(selectedCompanyId, {
+            const targetCid = activeCompany?.id || selectedCompanyId;
+            if (targetCid) {
+                updateCompany(targetCid, {
                     ruc: formData.ruc,
                     solUser: formData.solUser,
                     solPass: formData.solPass,
@@ -140,21 +172,29 @@ export const SunatSettings: React.FC = () => {
                 });
             }
 
-            // Guardar correlativos en localStorage
-            const cid = selectedCompanyId || '';
-            if (formData.serieFactura) localStorage.setItem(`ff_corr_${cid}_${formData.serieFactura}`, String(formData.correlativoFactura));
-            if (formData.serieBoleta) localStorage.setItem(`ff_corr_${cid}_${formData.serieBoleta}`, String(formData.correlativoBoleta));
+            // Guardar correlativos en el servidor (fuente compartida por empresa+serie)
+            const cid = targetCid || '';
+            if (formData.serieFactura) {
+                setCorrelativoBaseline(cid, formData.serieFactura, Number(formData.correlativoFactura) || 0).catch(() => {});
+                localStorage.setItem(`ff_corr_${cid}_${formData.serieFactura}`, String(formData.correlativoFactura));
+            }
+            if (formData.serieBoleta) {
+                setCorrelativoBaseline(cid, formData.serieBoleta, Number(formData.correlativoBoleta) || 0).catch(() => {});
+                localStorage.setItem(`ff_corr_${cid}_${formData.serieBoleta}`, String(formData.correlativoBoleta));
+            }
             
             setStatus('success');
+            showToast('success', 'Configuración SUNAT guardada correctamente');
             setTimeout(() => setStatus('idle'), 3000);
         } catch (error: any) {
             setErrorMsg(error.message);
+            showToast('error', error.message || 'No se pudo conectar con SUNAT');
             setStatus('error');
         }
     };
 
 
-    if (!selectedCompany) return (
+    if (!activeCompany) return (
         <div className="bg-white rounded-2xl shadow-xl p-8 max-w-2xl mx-auto border border-gray-100 text-center">
             <p className="text-gray-500 font-bold">Selecciona una empresa para configurar sus credenciales SUNAT.</p>
         </div>
@@ -173,6 +213,25 @@ export const SunatSettings: React.FC = () => {
             </div>
 
             <form onSubmit={handleSave} className="space-y-6">
+                <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                        <label className="text-sm font-bold text-gray-800 flex items-center gap-2">
+                            <Shield className="w-4 h-4 text-blue-600" /> Entorno de Emisión SUNAT
+                        </label>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                            Selecciona Producción para comprobantes reales con tu RUC/SOL o Beta para pruebas
+                        </p>
+                    </div>
+                    <select
+                        value={formData.sunatEnv}
+                        onChange={(e) => setFormData({ ...formData, sunatEnv: e.target.value as 'SANDBOX' | 'PRODUCTION' })}
+                        className="px-4 py-2 bg-white border border-blue-200 rounded-xl text-sm font-bold text-gray-800 outline-none focus:ring-2 focus:ring-blue-500 shrink-0"
+                    >
+                        <option value="SANDBOX">Pruebas (Beta / Sandbox)</option>
+                        <option value="PRODUCTION">Producción (Comprobantes Reales)</option>
+                    </select>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
                         <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
@@ -352,6 +411,15 @@ export const SunatSettings: React.FC = () => {
                 )}
 
             </form>
+
+            {toast && createPortal(
+                <div className={`fixed top-5 right-5 z-[9999] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl text-sm font-semibold border animate-[fadeIn_0.2s_ease-out] ${toast.type === 'error' ? 'bg-red-600 text-white border-red-700' : 'bg-green-600 text-white border-green-700'}`}>
+                    {toast.type === 'error' ? <AlertCircle className="w-5 h-5 shrink-0" /> : <CheckCircle className="w-5 h-5 shrink-0" />}
+                    <span>{toast.message}</span>
+                    <button type="button" onClick={() => setToast(null)} className="ml-2 opacity-80 hover:opacity-100 text-lg leading-none" aria-label="Cerrar">✕</button>
+                </div>,
+                document.body
+            )}
         </div>
     );
 };

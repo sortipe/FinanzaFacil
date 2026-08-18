@@ -5,7 +5,8 @@ const SEED_USERS = [
   { id: 'u2', name: 'Contador Carlos Ruiz', email: 'carlos@contador.com', role: 'ACCOUNTANT', password: '123', must_change_password: 0 },
   { id: 'u4', name: 'Contadora Maria Paz', email: 'maria@contador.com', role: 'ACCOUNTANT', password: '123', must_change_password: 0 },
   { id: 'u3', name: 'Juan Pérez - Demo', email: 'user@demo.com', role: 'USER', password: '123', subscription_status: 'ACTIVE', subscription_start_date: '2026-01-01', subscription_end_date: '2027-01-01', assigned_accountant_id: 'u2', ruc: '10456789123', dni: '45678912', business_name: 'JUAN PEREZ EIRL', tax_address: 'Av. Larco 456, Miraflores, Lima' },
-  { id: 'u5', name: 'Elena Garcia', email: 'elena@gmail.com', role: 'USER', password: '123', must_change_password: 1, subscription_status: 'PENDING', assigned_accountant_id: 'u2' },
+   { id: 'u5', name: 'Elena Garcia', email: 'elena@gmail.com', role: 'USER', password: '123', must_change_password: 1, subscription_status: 'PENDING', assigned_accountant_id: 'u2' },
+   { id: 'u6', name: 'Carlos Profesional', email: 'prof@demo.com', role: 'USER', password: 'Prof123', must_change_password: 0, subscription_status: 'ACTIVE', subscription_start_date: '2026-01-01', subscription_end_date: '2027-01-01', assigned_accountant_id: 'u2', ruc: '20451236543', dni: '45123654', business_name: 'CARLOS PROFESIONAL EIR', tax_address: 'Av. Siempre Viva 742, Lima', sol_user: 'PROF_NATURAL', sol_pass: 'demo123' },
 ];
 
 const SEED_PACKAGES = [
@@ -27,7 +28,11 @@ const SEED_EXPENSES = [
 ];
 
 const SEED_DOCS = [
-  { id: 'RH-1001', user_id: 'u3', accountant_id: 'u2', name: 'R. Honorarios E001-45', file_url: '', mime_type: 'application/pdf', upload_date: '2024-05-01', period_month: 'Mayo', period_year: 2024, sunat_status: 'SENT', sunat_hash: 'abc123456789xyz', metadata: JSON.stringify({ recipientName: 'EMPRESA TECH SAC', recipientRuc: '20600011122', description: 'Asesoría en Desarrollo de Software', amount: 5000, retention: 400, netAmount: 4600, date: '2024-05-01' }) },
+   { id: 'RH-1001', user_id: 'u3', accountant_id: 'u2', name: 'R. Honorarios E001-45', file_url: '', mime_type: 'application/pdf', upload_date: '2024-05-01', period_month: 'Mayo', period_year: 2024, sunat_status: 'SENT', sunat_hash: 'abc123456789xyz', metadata: JSON.stringify({ recipientName: 'EMPRESA TECH SAC', recipientRuc: '20600011122', description: 'Asesoría en Desarrollo de Software', amount: 5000, retention: 400, netAmount: 4600, date: '2024-05-01' }) },
+];
+
+const SEED_COMPANIES = [
+   { id: 'comp-u6', owner_user_id: 'u6', name: 'Carlos Profesional EIR', ruc: '20451236543', business_name: 'CARLOS PROFESIONAL EIR', tax_address: 'Av. Siempre Viva 742, Lima', dni: '45123654', is_persona_natural: 1, sol_user: 'PROF_NATURAL', sol_pass: 'demo123', sunat_token: null, sunat_api_url: null, cert_base64: null, cert_pass: null, serie_factura: 'F001', serie_boleta: 'B001', sunat_env: 'PRODUCTION', assigned_accountant_id: 'u2' },
 ];
 
 const seed = async () => {
@@ -40,11 +45,18 @@ const seed = async () => {
   console.log('Seeding initial data...');
 
   for (const u of SEED_USERS) {
-    await db.query('INSERT INTO users (id, name, email, role, password, must_change_password, subscription_status, assigned_accountant_id, subscription_start_date, subscription_end_date, ruc, dni, business_name, tax_address) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      [u.id, u.name, u.email, u.role, u.password, u.must_change_password ?? 0, u.subscription_status || 'PENDING', u.assigned_accountant_id || null, u.subscription_start_date || null, u.subscription_end_date || null, u.ruc || null, u.dni || null, u.business_name || null, u.tax_address || null]);
-  }
+     await db.query('INSERT INTO users (id, name, email, role, password, must_change_password, subscription_status, subscription_start_date, subscription_end_date, ruc, sol_user, sol_pass) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+       [u.id, u.name, u.email, u.role, u.password, u.must_change_password ?? 0, u.subscription_status || 'PENDING', u.subscription_start_date || null, u.subscription_end_date || null, u.ruc || null, u.sol_user || null, u.sol_pass || null]);
+   }
 
-  for (const p of SEED_PACKAGES) {
+   for (const c of SEED_COMPANIES) {
+     await db.query(`INSERT INTO companies (id, owner_user_id, name, ruc, business_name, tax_address, dni, is_persona_natural, sol_user, sol_pass, sunat_token, sunat_api_url, cert_base64, cert_pass, serie_factura, serie_boleta, sunat_env, assigned_accountant_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+       c.id, c.owner_user_id, c.name, c.ruc || null, c.business_name || null, c.tax_address || null, c.dni || null, c.is_persona_natural ? 1 : 0,
+       c.sol_user || null, c.sol_pass || null, c.sunat_token || null, c.sunat_api_url || null, c.cert_base64 || null, c.cert_pass || null, c.serie_factura || null, c.serie_boleta || null, c.sunat_env || 'SANDBOX', c.assigned_accountant_id || null
+     ]);
+   }
+
+   for (const p of SEED_PACKAGES) {
     await db.query('INSERT INTO packages (id, name, price, duration_months, features, type) VALUES (?,?,?,?,?,?)',
       [p.id, p.name, p.price, p.duration_months, p.features, p.type || 'CLIENT']);
   }

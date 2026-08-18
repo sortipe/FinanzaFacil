@@ -21,8 +21,20 @@ const buildQuery = (params: Record<string, string | undefined>) => {
 export const fetchUsers = (): Promise<any> => request('/users');
 export const fetchUser = (id: string): Promise<any> => request(`/users/${id}`);
 export const createUser = (user: any): Promise<any> => request('/users', { method: 'POST', body: JSON.stringify(user) });
+export const verifyCredentials = (email: string, password: string): Promise<any> =>
+  request('/verify-credentials', { method: 'POST', body: JSON.stringify({ email, password }) });
 export const updateUser = (id: string, data: any): Promise<any> => request(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const resetUserPassword = (id: string, data: { password: string; mustChangePassword?: boolean }): Promise<any> =>
+  request(`/users/${id}/reset-password`, { method: 'POST', body: JSON.stringify(data) });
 export const deleteUser = (id: string): Promise<any> => request(`/users/${id}`, { method: 'DELETE' });
+export const sendPasswordResetEmail = (payload: { email: string; name: string; password: string }): Promise<any> =>
+  request('/send-password-reset-email', { method: 'POST', body: JSON.stringify(payload) });
+export const forgotPassword = (email: string): Promise<any> =>
+  request('/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+export const verifyEmailToken = (token: string): Promise<any> =>
+  request('/auth/verify-token', { method: 'POST', body: JSON.stringify({ token }) });
+export const resendVerificationEmail = (email: string): Promise<any> =>
+  request('/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email }) });
 
 // Companies
 export const fetchCompanies = (userId?: string): Promise<any> => request(`/companies${buildQuery({ userId })}`);
@@ -34,6 +46,7 @@ export const deleteCompany = (id: string): Promise<any> => request(`/companies/$
 // Expenses
 export const fetchExpenses = (userId?: string, companyId?: string): Promise<any> => request(`/expenses${buildQuery({ userId, companyId })}`);
 export const createExpense = (expense: any): Promise<any> => request('/expenses', { method: 'POST', body: JSON.stringify(expense) });
+export const createBatchExpenses = (expensesList: any[]): Promise<any> => request('/expenses/batch', { method: 'POST', body: JSON.stringify(expensesList) });
 export const deleteExpense = (id: string): Promise<any> => request(`/expenses/${id}`, { method: 'DELETE' });
 
 // Tax Documents
@@ -74,6 +87,14 @@ export const createPendingInvoice = (invoice: any): Promise<any> => request('/pe
 export const updatePendingInvoice = (id: string, data: any): Promise<any> => request(`/pending-invoices/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deletePendingInvoice = (id: string): Promise<any> => request(`/pending-invoices/${id}`, { method: 'DELETE' });
 
+// Correlativos (compartidos por empresa + serie en la BD)
+export const getNextCorrelative = (companyId: string, serie: string): Promise<any> =>
+  request(`/next-correlative${buildQuery({ companyId, serie })}`);
+export const allocateNextCorrelative = (companyId: string, serie: string, requested?: number): Promise<any> =>
+  request('/next-correlative', { method: 'POST', body: JSON.stringify({ companyId, serie, requested }) });
+export const setCorrelativoBaseline = (companyId: string, serie: string, lastUsed: number): Promise<any> =>
+  request('/correlativos', { method: 'POST', body: JSON.stringify({ companyId, serie, lastUsed }) });
+
 // Sunat Config
 export const fetchSunatConfig = (): Promise<any> => request('/sunat-config');
 export const updateSunatConfig = (config: any): Promise<any> => request('/sunat-config', { method: 'PUT', body: JSON.stringify(config) });
@@ -82,3 +103,24 @@ export const updateSunatConfig = (config: any): Promise<any> => request('/sunat-
 export const fetchNotifications = (): Promise<any> => request('/notifications');
 export const createNotification = (notification: any): Promise<any> => request('/notifications', { method: 'POST', body: JSON.stringify(notification) });
 export const deleteNotification = (id: string): Promise<any> => request(`/notifications/${id}`, { method: 'DELETE' });
+
+// Payment Alerts
+export const fetchPaymentAlerts = (params?: { userId?: string; companyId?: string }): Promise<any> => {
+  const query = new URLSearchParams();
+  if (params?.userId) query.append('userId', params.userId);
+  if (params?.companyId) query.append('companyId', params.companyId);
+  return request(`/payment-alerts?${query.toString()}`);
+};
+export const createPaymentAlert = (alert: any): Promise<any> => request('/payment-alerts', { method: 'POST', body: JSON.stringify(alert) });
+export const updatePaymentAlert = (id: string, alert: any): Promise<any> => request(`/payment-alerts/${id}`, { method: 'PUT', body: JSON.stringify(alert) });
+export const deletePaymentAlert = (id: string): Promise<any> => request(`/payment-alerts/${id}`, { method: 'DELETE' });
+
+// Personal Expenses
+export const fetchPersonalExpenses = (params?: { userId?: string }): Promise<any> => {
+  const query = new URLSearchParams();
+  if (params?.userId) query.append('userId', params.userId);
+  return request(`/personal-expenses?${query.toString()}`);
+};
+export const createPersonalExpense = (expense: any): Promise<any> => request('/personal-expenses', { method: 'POST', body: JSON.stringify(expense) });
+export const updatePersonalExpense = (id: string, expense: any): Promise<any> => request(`/personal-expenses/${id}`, { method: 'PUT', body: JSON.stringify(expense) });
+export const deletePersonalExpense = (id: string): Promise<any> => request(`/personal-expenses/${id}`, { method: 'DELETE' });

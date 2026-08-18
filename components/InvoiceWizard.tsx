@@ -1,12 +1,16 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
 import { consultaService } from '../services/consultaService';
-import { InvoiceItem, UserProduct } from '../types';
+import { getNextCorrelative, allocateNextCorrelative } from '../src/services/api';
+import { InvoiceItem, UserProduct, Company } from '../types';
 import {
   X, User, Search, Loader2, FileText, Calendar, DollarSign,
   CheckCircle2, AlertTriangle, Plus, Trash2, Eye, ArrowLeft,
-  Globe, ShieldCheck, ChevronRight, ChevronLeft, FileInput, CloudOff, ToggleLeft, ToggleRight
+  Globe, ShieldCheck, ChevronRight, ChevronLeft, FileInput, CloudOff, ToggleLeft, ToggleRight, MessageCircle
 } from 'lucide-react';
+import { InvoicePreview, InvoicePreviewData } from './InvoicePreview';
+import { generarPdfDesdeElemento } from '../services/pdfService';
+import { enviarComprobanteWhatsApp, construirMensajeComprobante, esCelularValido, EnvioWhatsAppResult } from '../utils/whatsapp';
 
 interface WizardData {
   customerDocType: 'DNI' | 'RUC';
@@ -14,6 +18,7 @@ interface WizardData {
   customerName: string;
   customerAddress: string;
   customerEmail: string;
+  customerPhone?: string;
   documentType: 'factura' | 'boleta';
   sendToSunat: boolean;
   serie: string;
@@ -24,7 +29,7 @@ interface WizardData {
   items: InvoiceItem[];
 }
 
-const getNextCorrelative = (userId: string, serie: string): number => {
+const getLocalNextCorr = (userId: string, serie: string): number => {
   const key = `ff_corr_${userId}_${serie}`;
   const last = parseInt(localStorage.getItem(key) || '0', 10);
   return Math.max(last + 1, 1);
@@ -36,21 +41,26 @@ const saveCorrelative = (userId: string, serie: string, corr: number) => {
 
 const padCorrelative = (n: number): string => String(n).padStart(8, '0');
 
-const getDefaultData = (company?: any): WizardData => ({
-  customerDocType: 'RUC',
-  customerDocNumber: '',
-  customerName: '',
-  customerAddress: '',
-  customerEmail: '',
-  documentType: 'factura',
-  sendToSunat: true,
-  serie: company?.serieFactura || 'F001',
-  correlative: 1,
-  issueDate: new Date().toISOString().split('T')[0],
-  currency: 'PEN',
-  operationType: '0101',
-  items: [{ quantity: 1, unit: 'NIU', description: '', unitPrice: 0, total: 0 }]
-});
+const getDefaultData = (company?: any, initialType?: 'factura' | 'boleta', defaultSendToSunat: boolean = true): WizardData => {
+  const docType = initialType || 'factura';
+  const serie = docType === 'factura' ? (company?.serieFactura || 'F001') : (company?.serieBoleta || 'B001');
+  return {
+    customerDocType: 'RUC',
+    customerDocNumber: '',
+    customerName: '',
+    customerAddress: '',
+    customerEmail: '',
+    customerPhone: '',
+    documentType: docType,
+    sendToSunat: true,
+    serie,
+    correlative: 1,
+    issueDate: new Date().toISOString().split('T')[0],
+    currency: 'PEN',
+    operationType: '0101',
+    items: [{ quantity: 1, unit: 'NIU', description: '', unitPrice: 0, total: 0 }]
+  };
+};
 
 const STEPS = ['Cliente', 'Factura', 'Items', 'Resumen'];
 
@@ -62,24 +72,33 @@ interface EmitResult {
   cdrBase64?: string;
   amount?: number;
   customerName?: string;
+  customerRuc?: string;
+  customerPhone?: string;
 }
 
 interface Props {
   isOpen?: boolean;
   onClose: () => void;
   onEmitted?: (result: EmitResult) => void;
+  company?: Company;
+  accountantId?: string;
+  initialType?: 'factura' | 'boleta';
+  defaultSendToSunat?: boolean;
 }
 
-export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) => {
+export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted, company, accountantId, initialType, defaultSendToSunat = true }) => {
   if (isOpen !== undefined && !isOpen) return null;
 
   const { currentUser, selectedCompany, selectedCompanyId, sunatGlobalConfig, userProducts, addUserProduct, addPendingInvoice, removeUserProduct } = useStore();
+  const effectiveCompany = company ?? selectedCompany;
+  const effectiveCompanyId = company?.id ?? selectedCompanyId;
+  const effectiveOwnerId = accountantId ? (company?.ownerUserId ?? selectedCompany?.ownerUserId ?? currentUser?.id) : undefined;
   const [step, setStep] = useState(0);
   const [data, setData] = useState<WizardData>(() => {
-    const companyId = selectedCompanyId;
-    const defaults = getDefaultData(selectedCompany);
+    const companyId = effectiveCompanyId;
+    const defaults = getDefaultData(effectiveCompany, initialType, defaultSendToSunat);
     const serie = defaults.serie;
-    const corr = companyId ? getNextCorrelative(companyId, serie) : 1;
+    const corr = companyId ? getLocalNextCorr(companyId, serie) : 1;
     return { ...defaults, correlative: corr };
   });
   const [searching, setSearching] = useState(false);
@@ -92,6 +111,10 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
   const [success, setSuccess] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState<{ idx: number; filter: string }>({ idx: -1, filter: '' });
   const suggestionRef = useRef<HTMLDivElement>(null);
+  const pdfRef = useRef<HTMLDivElement>(null);
+  const [emittedXml, setEmittedXml] = useState<string | undefined>(undefined);
+  const [enviandoWa, setEnviandoWa] = useState(false);
+  const [waResultado, setWaResultado] = useState<EnvioWhatsAppResult | null>(null);
 
   const extractCdrStatus = (soapXml: string): {code: string; description: string} | null => {
     try {
@@ -104,10 +127,36 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
 
   const update = (partial: Partial<WizardData>) => setData(prev => ({ ...prev, ...partial }));
 
+  // Sincronizar el siguiente correlativo con el servidor (fuente compartida por empresa+serie)
+  useEffect(() => {
+    if (!effectiveCompanyId || !data.serie) return;
+    let cancelled = false;
+    getNextCorrelative(effectiveCompanyId, data.serie)
+      .then((res: any) => {
+        if (cancelled || !res?.success) return;
+        const serverNext = Number(res.next);
+        update({ correlative: serverNext });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveCompanyId, data.serie]);
+
   const handleSearch = async () => {
     const doc = data.customerDocNumber;
     if (doc.length !== 8 && doc.length !== 11) { setError('El documento debe tener 8 (DNI) o 11 (RUC) dígitos'); return; }
-    setSearching(true); setError('');
+    
+    setError('');
+    if (doc.length === 8) {
+      const boletaSerie = effectiveCompany?.serieBoleta || 'B001';
+      update({
+        customerDocType: 'DNI',
+        documentType: 'boleta',
+        serie: boletaSerie
+      });
+    }
+
+    setSearching(true);
     try {
       if (doc.length === 8) {
         const res = await consultaService.consultarDNI(doc);
@@ -125,21 +174,41 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
   const emitir = async () => {
     setEmitting(true); setError('');
 
+    if (data.documentType === 'factura' && (data.customerDocType === 'DNI' || data.customerDocNumber.length !== 11)) {
+      setError('RUC inválido: No se puede emitir una Factura Electrónica a un cliente con DNI (8 dígitos). Las facturas requieren un RUC válido de 11 dígitos. Si tu cliente tiene DNI, por favor selecciona Boleta.');
+      setEmitting(false);
+      return;
+    }
+
     const isDni = data.customerDocType === 'DNI';
     const total = data.items.reduce((s, i) => s + i.total, 0);
 
-    if (data.sendToSunat && (!selectedCompany?.solUser || !selectedCompany?.solPass)) {
+    if (data.sendToSunat && (!effectiveCompany?.solUser || !effectiveCompany?.solPass)) {
       setError('Credenciales SOL no configuradas. Ve a Configuración SUNAT.'); setEmitting(false); return;
     }
 
+    // Reservar correlativo en el servidor (compartido por empresa+serie, evita duplicados)
+    let finalCorrelative = typeof data.correlative === 'number' ? data.correlative : 1;
+    if (effectiveCompanyId && data.serie) {
+      try {
+        const alloc = await allocateNextCorrelative(effectiveCompanyId, data.serie, finalCorrelative);
+        if (alloc && alloc.success) {
+          finalCorrelative = Number(alloc.next) || finalCorrelative;
+          if (finalCorrelative !== data.correlative) update({ correlative: finalCorrelative });
+        }
+      } catch { /* si el servidor falla, se usa el correlativo local */ }
+    }
+    const paddedCorr = padCorrelative(finalCorrelative);
+
     const payload = {
       invoiceData: {
-        id: `${data.serie}-${typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001'}`,
+        id: `${data.serie}-${paddedCorr}`,
         issueDate: data.issueDate,
         customerRuc: data.customerDocNumber,
         customerName: data.customerName,
+        customerPhone: data.customerPhone,
         customerType: isDni ? '1' : '6',
-        emitterName: selectedCompany?.businessName || 'MI EMPRESA S.A.C.',
+        emitterName: effectiveCompany?.businessName || 'MI EMPRESA S.A.C.',
         items: data.items.map(i => ({
           description: i.description,
           quantity: i.quantity,
@@ -151,26 +220,27 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
         hasEstablishment: true
       },
       credentials: {
-        ruc: selectedCompany?.ruc,
-        user: selectedCompany?.solUser,
-        pass: selectedCompany?.solPass,
-        certBase64: selectedCompany?.certBase64,
-        certPass: selectedCompany?.certPass,
-        env: selectedCompany?.sunatEnv || 'PRODUCTION'
+        ruc: effectiveCompany?.ruc,
+        user: effectiveCompany?.solUser,
+        pass: effectiveCompany?.solPass,
+        certBase64: effectiveCompany?.certBase64,
+        certPass: effectiveCompany?.certPass,
+        env: effectiveCompany?.sunatEnv || 'SANDBOX'
       }
     };
 
     const buildPendingInvoice = (errorMsg: string) => ({
-      id: `${data.serie}-${typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001'}`,
-      userId: currentUser?.id || 'unknown',
-      companyId: selectedCompanyId || '',
+      id: `${data.serie}-${paddedCorr}`,
+      userId: effectiveOwnerId ?? currentUser?.id ?? 'unknown',
+      companyId: effectiveCompanyId || '',
       serie: data.serie,
-      correlative: typeof data.correlative === 'number' ? data.correlative : 0,
+      correlative: finalCorrelative,
       documentType: data.documentType,
       payload,
       customerDocType: data.customerDocType,
       customerDocNumber: data.customerDocNumber,
       customerName: data.customerName,
+      customerPhone: data.customerPhone,
       amount: total,
       createdAt: new Date().toISOString(),
       lastAttempt: new Date().toISOString(),
@@ -182,18 +252,20 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
     try {
       if (!data.sendToSunat) {
         // === FLUJO INTERNO (sin envío a SUNAT) ===
-        if (selectedCompanyId && typeof data.correlative === 'number') {
-          saveCorrelative(selectedCompanyId, data.serie, data.correlative);
+        if (effectiveCompanyId && typeof data.correlative === 'number') {
+          saveCorrelative(effectiveCompanyId, data.serie, finalCorrelative);
         }
         setSuccess(true);
         setCdrInfo({ code: '---', description: 'Interno - No enviado a SUNAT' });
-        const paddedCorr = typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001';
+        setEmittedXml(undefined);
         onEmitted?.({
           id: `${data.serie}-${paddedCorr}`,
-          name: `${data.documentType === 'factura' ? 'F' : 'B'}${data.serie}-${paddedCorr}`,
+          name: `${data.serie}-${paddedCorr}`,
           sunatStatus: 'INTERNO',
           amount: total,
-          customerName: data.customerName
+          customerName: data.customerName,
+          customerRuc: data.customerDocNumber,
+          customerPhone: data.customerPhone
         });
         setEmitting(false);
         return;
@@ -207,40 +279,42 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
       });
       const result = await response.json();
       if (result.success) {
-        // Guardar correlativo usado
-        if (selectedCompanyId && typeof data.correlative === 'number') {
-          saveCorrelative(selectedCompanyId, data.serie, data.correlative);
+        // Guardar correlativo usado (referencia local; la fuente es el servidor)
+        if (effectiveCompanyId && typeof data.correlative === 'number') {
+          saveCorrelative(effectiveCompanyId, data.serie, finalCorrelative);
           // Pre-cargar siguiente correlativo para el próximo wizard
-          localStorage.setItem(`ff_corr_next_${selectedCompanyId}_${data.serie}`, String(data.correlative + 1));
+          localStorage.setItem(`ff_corr_next_${effectiveCompanyId}_${data.serie}`, String(finalCorrelative + 1));
         }
         setSuccess(true);
         setSunatResponse(result.sunatResponse || '');
+        setEmittedXml(result.xmlContent || undefined);
         const cdrInfoVal = result.cdrCode ? { code: result.cdrCode, description: result.cdrDesc || '' } : (result.cdrBase64 ? extractCdrStatus(result.sunatResponse) : null);
         setCdrInfo(cdrInfoVal);
-        const paddedCorr = typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001';
         onEmitted?.({
           id: `${data.serie}-${paddedCorr}`,
-          name: `${data.documentType === 'factura' ? 'F' : 'B'}${data.serie}-${paddedCorr}`,
+          name: `${data.serie}-${paddedCorr}`,
           sunatStatus: 'ACEPTADO',
           xmlContent: result.xmlContent,
           cdrBase64: result.cdrBase64,
           amount: total,
-          customerName: data.customerName
+          customerName: data.customerName,
+          customerRuc: data.customerDocNumber,
+          customerPhone: data.customerPhone
         });
         // Verificar estado con SUNAT (ConsultaCPE)
         setVerificando(true);
         try {
           const tipoDoc = data.documentType === 'factura' ? '01' : '03';
-          const correlativoNum = parseInt(String(data.correlative).replace(/^0+/, ''), 10);
+          const correlativoNum = parseInt(String(finalCorrelative).replace(/^0+/, ''), 10);
           const cpeResp = await fetch('/consultar-cpe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              ruc: selectedCompany?.ruc,
+              ruc: effectiveCompany?.ruc,
               tipo: tipoDoc,
               serie: data.serie,
               numero: correlativoNum,
-              credentials: { ruc: selectedCompany?.ruc, user: selectedCompany?.solUser, pass: selectedCompany?.solPass, env: selectedCompany?.sunatEnv || 'PRODUCTION' }
+              credentials: { ruc: effectiveCompany?.ruc, user: effectiveCompany?.solUser, pass: effectiveCompany?.solPass, env: effectiveCompany?.sunatEnv || 'SANDBOX' }
             })
           });
           const cpeResult = await cpeResp.json();
@@ -251,20 +325,98 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
         } catch {}
         setVerificando(false);
       } else {
-        setError(result.error || 'Error del servidor SUNAT');
+        let rawError = result.error || 'Error del servidor SUNAT';
+        if (rawError.includes('2800') || rawError.includes('schemeID') || rawError.includes('tipo de documento de identidad del receptor no esta permitido')) {
+          rawError = 'RUC inválido: La SUNAT rechazó la Factura porque el documento del cliente es un DNI (8 dígitos). Las Facturas requieren un RUC válido de 11 dígitos. Cambia el comprobante a Boleta o ingresa un RUC válido.';
+        }
+        setError(rawError);
         if (result.sunatResponse) setSunatResponse(result.sunatResponse);
-        addPendingInvoice(buildPendingInvoice(result.error || 'Error del servidor SUNAT'));
+        addPendingInvoice(buildPendingInvoice(rawError));
       }
     } catch (err: any) {
-      const errorMsg = 'Error de conexión: ' + (err.message || 'Desconocido');
+      let errorMsg = 'Error de conexión: ' + (err.message || 'Desconocido');
+      if (errorMsg.includes('2800') || errorMsg.includes('schemeID') || errorMsg.includes('tipo de documento de identidad del receptor no esta permitido')) {
+        errorMsg = 'RUC inválido: La SUNAT rechazó la Factura porque el documento del cliente es un DNI (8 dígitos). Las Facturas requieren un RUC válido de 11 dígitos. Cambia el comprobante a Boleta o ingresa un RUC válido.';
+      }
       setError(errorMsg);
       addPendingInvoice(buildPendingInvoice(errorMsg));
     } finally { setEmitting(false); }
   };
 
+  const previewData = useMemo((): InvoicePreviewData => {
+    const paddedCorr = typeof data.correlative === 'number' ? padCorrelative(data.correlative) : '00000001';
+    return {
+      documentType: data.documentType,
+      serieNumero: `${data.serie}-${paddedCorr}`,
+      issueDate: data.issueDate,
+      emitterName: effectiveCompany?.businessName || 'MI EMPRESA S.A.C.',
+      emitterRuc: effectiveCompany?.ruc || '',
+      emitterAddress: effectiveCompany?.taxAddress || '',
+      customerName: data.customerName,
+      customerDocNumber: data.customerDocNumber,
+      customerDocTypeLabel: data.customerDocType === 'DNI' ? 'DNI' : 'RUC',
+      customerAddress: data.customerAddress,
+      customerPhone: data.customerPhone,
+      items: data.items.map(i => ({
+        description: i.description,
+        quantity: i.quantity,
+        unit: i.unit,
+        unitPrice: typeof i.unitPrice === 'string' ? (parseFloat(i.unitPrice) || 0) : i.unitPrice,
+        total: i.total
+      })),
+      total: data.items.reduce((s, i) => s + i.total, 0),
+      currency: data.currency
+    };
+  }, [data, effectiveCompany]);
+
+  const enviarWhatsApp = async () => {
+    if (!esCelularValido(data.customerPhone || '')) return;
+    setEnviandoWa(true);
+    setWaResultado(null);
+    try {
+      const el = pdfRef.current;
+      if (!el) throw new Error('Vista no disponible');
+      const serieNumero = previewData.serieNumero;
+      const pdfFilename = `${data.serie}-${serieNumero.split('-')[1]}.pdf`;
+      const pdfBlob = await generarPdfDesdeElemento(el, { filename: pdfFilename });
+      const texto = construirMensajeComprobante({
+        tipo: data.documentType,
+        serieNumero,
+        cliente: data.customerName,
+        monto: totalGeneral,
+        currency: data.currency
+      });
+      const resultado = await enviarComprobanteWhatsApp({
+        phone: data.customerPhone || '',
+        text: texto,
+        pdfBlob,
+        pdfFilename,
+        xmlContent: emittedXml,
+        xmlFilename: emittedXml ? `${serieNumero}.xml` : undefined
+      });
+      setWaResultado(resultado);
+    } catch {
+      setWaResultado({ status: 'error' });
+    } finally {
+      setEnviandoWa(false);
+    }
+  };
+
   const canGoNext = (): boolean => {
-    if (step === 0) return !!data.customerDocNumber && !!data.customerName;
-    if (step === 1) return !!data.serie && !!data.issueDate;
+    if (step === 0) {
+      if (!data.customerDocNumber || !data.customerName) return false;
+      if (data.documentType === 'factura' && (data.customerDocType === 'DNI' || data.customerDocNumber.length !== 11)) {
+        return false;
+      }
+      return true;
+    }
+    if (step === 1) {
+      if (!data.serie || !data.issueDate) return false;
+      if (data.documentType === 'factura' && (data.customerDocType === 'DNI' || data.customerDocNumber.length !== 11)) {
+        return false;
+      }
+      return true;
+    }
     if (step === 2) return data.items.length > 0 && data.items.every(i => {
       const up = typeof i.unitPrice === 'string' ? (parseFloat(i.unitPrice) || 0) : i.unitPrice;
       return i.description && i.quantity > 0 && up >= 0;
@@ -274,6 +426,12 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
 
   const next = () => {
     if (!canGoNext()) return;
+    if (step === 0 && data.documentType === 'factura') {
+      if (data.customerDocType === 'DNI' || data.customerDocNumber.length !== 11) {
+        setError('RUC inválido: Las Facturas Electrónicas requieren un RUC válido de 11 dígitos. Si tu cliente tiene DNI (8 dígitos), por favor cambia el comprobante a Boleta.');
+        return;
+      }
+    }
     if (step === 2) {
       data.items.forEach(item => {
         if (item.description.trim()) {
@@ -315,9 +473,10 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
     if (activeSuggestion.idx < 0 || !activeSuggestion.filter) return [];
     const filter = activeSuggestion.filter.toLowerCase();
     return (userProducts || []).filter(p =>
-      p.userId === currentUser?.id && (!selectedCompanyId || p.companyId === selectedCompanyId) && p.description.toLowerCase().includes(filter)
+      p.userId === currentUser?.id && (!effectiveCompanyId || p.companyId === effectiveCompanyId) && p.description.toLowerCase().includes(filter)
     ).slice(0, 6);
-  }, [activeSuggestion, userProducts, currentUser?.id, selectedCompanyId]);
+
+  }, [activeSuggestion, userProducts, currentUser?.id, effectiveCompanyId]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -336,7 +495,7 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
           <div className="flex items-center space-x-3">
             <FileInput className="w-7 h-7" />
             <h3 className="text-lg font-black uppercase tracking-tight text-white">
-              {success ? '¡Comprobante Emitido!' : `Emisión de ${data.documentType === 'factura' ? 'Factura' : 'Boleta'}${!data.sendToSunat ? ' Interna' : ''} Electrónica`}
+              {success ? '¡Comprobante Emitido!' : `Emisión de ${data.documentType === 'factura' ? 'Factura' : 'Boleta'} Electrónica`}
             </h3>
           </div>
           {!emitting && (
@@ -375,6 +534,30 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
 
 
               </div>
+              {esCelularValido(data.customerPhone || '') && (
+                <div className="space-y-3">
+                  <button onClick={enviarWhatsApp} disabled={enviandoWa}
+                    className="w-full py-4 bg-[#25D366] text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-[#1fb858] transition flex items-center justify-center gap-2 disabled:opacity-60">
+                    {enviandoWa ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageCircle className="w-4 h-4" />}
+                    {enviandoWa ? 'Preparando archivos...' : `Enviar por WhatsApp a +51 ${data.customerPhone}`}
+                  </button>
+                  {waResultado?.status === 'shared' && (
+                    <p className="text-[11px] font-bold text-emerald-600">Comprobante enviado. Completa el envío en WhatsApp.</p>
+                  )}
+                  {waResultado?.status === 'fallback' && waResultado.waUrl && (
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] font-bold text-amber-600">Archivos descargados. Abre WhatsApp y adjúntalos en el chat:</p>
+                      <a href={waResultado.waUrl} target="_blank" rel="noopener noreferrer"
+                        className="block w-full py-3 bg-[#25D366]/10 text-[#128C7E] border-2 border-[#25D366] rounded-2xl font-black uppercase text-[10px] tracking-widest hover:bg-[#25D366]/20 transition flex items-center justify-center gap-2">
+                        <MessageCircle className="w-4 h-4" /> Abrir WhatsApp
+                      </a>
+                    </div>
+                  )}
+                  {waResultado?.status === 'error' && (
+                    <p className="text-[11px] font-bold text-red-500">No se pudo generar el comprobante. Inténtalo de nuevo.</p>
+                  )}
+                </div>
+              )}
               <button onClick={onClose}
                 className="w-full py-4 bg-green-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-green-700 transition">
                 Regresar al Dashboard
@@ -396,7 +579,27 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
                   <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider">Datos del Cliente</h4>
                   <div className="flex gap-2">
                     {(['RUC', 'DNI'] as const).map(t => (
-                      <button key={t} type="button" onClick={() => update({ customerDocType: t, customerDocNumber: '', customerName: '', customerAddress: '' })}
+                      <button key={t} type="button" onClick={() => {
+                        setError('');
+                        if (t === 'DNI') {
+                          const boletaSerie = effectiveCompany?.serieBoleta || 'B001';
+                          update({
+                            customerDocType: 'DNI',
+                            customerDocNumber: '',
+                            customerName: '',
+                            customerAddress: '',
+                            documentType: 'boleta',
+                            serie: boletaSerie
+                          });
+                        } else {
+                          update({
+                            customerDocType: 'RUC',
+                            customerDocNumber: '',
+                            customerName: '',
+                            customerAddress: ''
+                          });
+                        }
+                      }}
                         className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
                           data.customerDocType === t ? 'bg-brand-700 text-white shadow-md' : 'bg-gray-50 text-gray-400 border border-gray-200'
                         }`}>{t}</button>
@@ -432,6 +635,18 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
                       className="w-full bg-gray-50 border-2 border-gray-200 p-3.5 rounded-xl text-sm text-gray-900 outline-none focus:border-brand-600 focus:bg-white"
                       value={data.customerEmail} onChange={e => update({ customerEmail: e.target.value })} />
                   </div>
+                  <div>
+                    <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">Celular (opcional)</label>
+                    <input type="tel" placeholder="987654321" maxLength={9}
+                      className={`
+                        w-full bg-gray-50 border-2 p-3.5 rounded-xl text-sm text-gray-900 outline-none focus:border-brand-600 focus:bg-white uppercase
+                        ${data.customerPhone && !/^9\d{8}$/.test(data.customerPhone) ? 'border-amber-400 bg-amber-50' : 'border-gray-200'}
+                      `}
+                      value={data.customerPhone} onChange={e => update({ customerPhone: e.target.value.replace(/\D/g, '').slice(0, 9) })} />
+                    {data.customerPhone && !/^9\d{8}$/.test(data.customerPhone) && (
+                      <p className="text-[9px] font-bold text-amber-600 mt-1 ml-1">Formato: 9XXXXXXXX (9 dígitos)</p>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -441,10 +656,21 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
                   <h4 className="text-sm font-black text-gray-800 uppercase tracking-wider">Datos del Comprobante</h4>
                   <div className="flex gap-2">
                     {(['factura', 'boleta'] as const).map(t => {
-                      const serie = t === 'factura' ? (selectedCompany?.serieFactura || 'F001') : (selectedCompany?.serieBoleta || 'B001');
-                      const handleClick = () => {
-                        const next = selectedCompanyId ? getNextCorrelative(selectedCompanyId, serie) : 1;
-                        update({ documentType: t, serie, correlative: next });
+                      const serie = t === 'factura' ? (effectiveCompany?.serieFactura || 'F001') : (effectiveCompany?.serieBoleta || 'B001');
+                      const handleClick = async () => {
+                        if (t === 'factura' && (data.customerDocType === 'DNI' || data.customerDocNumber.length === 8)) {
+                          setError('RUC inválido: Las Facturas Electrónicas requieren un RUC de 11 dígitos. Se actualizó el tipo de documento del cliente a RUC. Si vas a emitir a un DNI, selecciona Boleta.');
+                          update({ documentType: t, serie, customerDocType: 'RUC' });
+                        } else {
+                          setError('');
+                          update({ documentType: t, serie });
+                        }
+                        if (effectiveCompanyId) {
+                          try {
+                            const res = await getNextCorrelative(effectiveCompanyId, serie);
+                            if (res?.success) update({ correlative: Number(res.next) || 1 });
+                          } catch { /* se mantiene el correlativo actual */ }
+                        }
                       };
                       return (
                         <button key={t} type="button" onClick={handleClick}
@@ -454,18 +680,6 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
                       );
                     })}
                   </div>
-                  {/* Toggle Enviar a SUNAT */}
-                  <div className="flex items-center justify-between bg-gray-50 border-2 border-gray-200 p-3.5 rounded-xl">
-                    <div className="flex items-center gap-2">
-                      {data.sendToSunat ? <Globe className="w-4 h-4 text-blue-600" /> : <CloudOff className="w-4 h-4 text-amber-600" />}
-                      <span className="text-xs font-bold text-gray-700">Enviar a SUNAT</span>
-                      {!data.sendToSunat && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[8px] font-black uppercase">Interno</span>}
-                    </div>
-                    <button type="button" onClick={() => update({ sendToSunat: !data.sendToSunat })}
-                      className={`relative w-12 h-6 rounded-full transition-all ${data.sendToSunat ? 'bg-brand-600' : 'bg-gray-300'}`}>
-                      <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${data.sendToSunat ? 'left-7' : 'left-1'}`} />
-                    </button>
-                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block ml-1">Serie</label>
@@ -474,10 +688,15 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
                           (data.documentType === 'factura' && !data.serie.startsWith('F')) || (data.documentType === 'boleta' && !data.serie.startsWith('B')) || data.serie.length !== 4
                             ? 'border-red-400 bg-red-50' : 'border-gray-200'
                         }`}
-                        value={data.serie} onChange={e => {
+                        value={data.serie} onChange={async e => {
                           const newSerie = e.target.value.toUpperCase();
-                          const next = selectedCompanyId ? getNextCorrelative(selectedCompanyId, newSerie) : 1;
-                          update({ serie: newSerie, correlative: next });
+                          update({ serie: newSerie });
+                          if (effectiveCompanyId) {
+                            try {
+                              const res = await getNextCorrelative(effectiveCompanyId, newSerie);
+                              if (res?.success) update({ correlative: Number(res.next) || 1 });
+                            } catch { /* se mantiene el correlativo actual */ }
+                          }
                         }} />
                       {(data.documentType === 'factura' && !data.serie.startsWith('F')) &&
                         <p className="text-[9px] text-red-500 mt-1 ml-1">Serie de factura debe empezar con F</p>}
@@ -679,7 +898,7 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
                     </div>
                     <div className="space-y-2 text-xs font-bold text-gray-700">
                       <h5 className="text-[9px] font-black text-brand-700 uppercase tracking-widest border-b border-brand-100 pb-2">Comprobante</h5>
-                      <p className="flex justify-between"><span className="text-gray-400">Tipo:</span><span>{data.documentType === 'factura' ? 'Factura' : 'Boleta'} {data.serie}-{typeof data.correlative === 'number' ? padCorrelative(data.correlative) : ''} {!data.sendToSunat && <span className="text-amber-600 text-[8px] font-black">(Interno)</span>}</span></p>
+                      <p className="flex justify-between"><span className="text-gray-400">Tipo:</span><span>{data.documentType === 'factura' ? 'Factura' : 'Boleta'} {data.serie}-{typeof data.correlative === 'number' ? padCorrelative(data.correlative) : ''}</span></p>
                       <p className="flex justify-between"><span className="text-gray-400">Fecha:</span><span>{data.issueDate}</span></p>
                       <p className="flex justify-between"><span className="text-gray-400">Moneda:</span><span>{data.currency === 'PEN' ? 'Soles' : 'Dólares'}</span></p>
                     </div>
@@ -711,34 +930,45 @@ export const InvoiceWizard: React.FC<Props> = ({ isOpen, onClose, onEmitted }) =
                     className="w-full py-4 bg-brand-700 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center hover:bg-brand-900 transition-all disabled:opacity-60">
                     {emitting ? (
                       <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Emitiendo...</>
-                    ) : data.sendToSunat ? (
-                      <><Globe className="w-4 h-4 mr-2" /> Emitir</>
                     ) : (
-                      <><FileText className="w-4 h-4 mr-2" /> Emitir</>
+                      <><Globe className="w-4 h-4 mr-2" /> Emitir a SUNAT</>
                     )}
                   </button>
                 </div>
               )}
 
               {/* NAVIGATION */}
-              <div className="flex gap-3 mt-8">
-                {step > 0 && (
-                  <button type="button" onClick={prev} disabled={emitting}
-                    className="flex-1 py-4 border-2 border-brand-100 text-brand-700 rounded-2xl font-black uppercase text-[10px] hover:bg-brand-50 transition flex items-center justify-center gap-2">
-                    <ArrowLeft className="w-3.5 h-3.5" /> Anterior
-                  </button>
-                )}
-                {step < STEPS.length - 1 && (
-                  <button type="button" onClick={next} disabled={!canGoNext() || emitting}
-                    className="flex-1 py-4 bg-brand-700 text-white rounded-2xl font-black uppercase text-[10px] shadow-xl flex items-center justify-center gap-2 hover:bg-brand-900 transition disabled:opacity-50">
-                    Siguiente <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
+              <div className="mt-8 space-y-2">
+                <div className="flex gap-3">
+                  {step > 0 && (
+                    <button type="button" onClick={prev} disabled={emitting}
+                      className="flex-1 py-4 border-2 border-brand-100 text-brand-700 rounded-2xl font-black uppercase text-[10px] hover:bg-brand-50 transition flex items-center justify-center gap-2">
+                      <ArrowLeft className="w-3.5 h-3.5" /> Anterior
+                    </button>
+                  )}
+                  {step < STEPS.length - 1 && (
+                    <button type="button" onClick={next} disabled={!canGoNext() || emitting}
+                      className="flex-1 py-4 bg-brand-700 text-white rounded-2xl font-black uppercase text-[10px] shadow-xl flex items-center justify-center gap-2 hover:bg-brand-900 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                      Siguiente <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                {data.documentType === 'factura' && (data.customerDocType === 'DNI' || data.customerDocNumber.length !== 11) && step < 2 && (
+                  <p className="text-[10px] font-bold text-amber-600 text-center animate-fade-in">
+                    🔒 Para avanzar con Factura Electrónica debes ingresar un RUC de 11 dígitos o cambiar el comprobante a Boleta.
+                  </p>
                 )}
               </div>
             </>
           )}
         </div>
       </div>
+
+      {success && (
+        <div ref={pdfRef} style={{ position: 'absolute', left: 0, top: 0, width: '800px', zIndex: -9999, opacity: 0.01, pointerEvents: 'none', background: '#ffffff' }}>
+          <InvoicePreview data={previewData} />
+        </div>
+      )}
     </div>
   );
 };

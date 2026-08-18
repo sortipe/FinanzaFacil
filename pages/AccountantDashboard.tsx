@@ -1,16 +1,22 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
-import { UserRole, Expense, TaxDocument, SubscriptionStatus, AdminNotification, Company } from '../types';
+import { UserRole, Expense, TaxDocument, SubscriptionStatus, AdminNotification, Company, PendingInvoice } from '../types';
 import { buildPdtCsv } from '../utils/pdtFormatter';
 import { consultaService } from '../services/consultaService';
 import { Payment } from './Payment';
+import { InvoiceWizard } from '../components/InvoiceWizard';
+import NoteWizard from '../components/NoteWizard';
+import { FileUploadZone } from '../components/FileUploadZone';
+import { parseUploadName, derivePeriod, readFileAsBase64 } from '../utils/uploadName';
 import {
   User as UserIcon, Users, ArrowLeft, ImageIcon, X, ShieldCheck, FileText,
   Tag, Clock, Hash, DollarSign, Lock, Upload, Trash2, FileUp, PlusCircle,
   Calendar, UserPlus, Building, MapPin, CreditCard, Download, FileSpreadsheet,
-  Eye, Search, Loader2, AlertTriangle, CheckCircle2, BarChart3, ReceiptText,
-  TrendingUp, TrendingDown, Printer, Filter, CalendarDays, Sparkles, History
-} from 'lucide-react';
+   Eye, Search, Loader2, AlertTriangle, CheckCircle2, BarChart3, ReceiptText,
+   TrendingUp, TrendingDown, Printer, Filter, CalendarDays, Sparkles, History,
+   FileInput, RefreshCw, FolderTree
+ } from 'lucide-react';
+import { FileTreeModal } from '../components/FileTreeModal';
 
 const MONTHS = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -19,11 +25,15 @@ const MONTHS = [
 const YEARS = [2023, 2024, 2025, 2026, 2027];
 
 export const AccountantDashboard: React.FC = () => {
-  const { users, currentUser, companies, selectedCompanyId, selectCompany, expenses, taxDocuments, addTaxDocument, deleteTaxDocument, registerUser, generatePassword, addNotification, addCompany } = useStore();
+  const { users, currentUser, companies, selectCompany, expenses, taxDocuments, addTaxDocument, addExpense, deleteTaxDocument, registerUser, generatePassword, addNotification, addCompany, pendingInvoices, updatePendingInvoiceStatus, removePendingInvoice, packages, subscriptionHistory, resetUserPassword } = useStore();
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
   const [showCreateClientModal, setShowCreateClientModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'clientes' | 'reporte' | 'subir'>('clientes');
+  const [showFileTreeModal, setShowFileTreeModal] = useState(false);
+  const [acctMainTab, setAcctMainTab] = useState<'comprobantes' | 'contador' | 'empresario'>('comprobantes');
+  const [acctSubTab, setAcctSubTab] = useState<'all' | 'factura' | 'boleta' | 'nc' | 'nd'>('all');
+  const [activeTab, setActiveTab] = useState<'clientes'>('clientes');
+  const [clientView, setClientView] = useState<'movimientos' | 'reporte' | 'subir' | 'facturacion'>('movimientos');
   const [showPayment, setShowPayment] = useState(false);
   const [searchClient, setSearchClient] = useState('');
 
@@ -45,22 +55,26 @@ export const AccountantDashboard: React.FC = () => {
   const [newClientData, setNewClientData] = useState({
     name: '', email: '', ruc: '', dni: '', businessName: '', taxAddress: ''
   });
-  const [generatedPassword, setGeneratedPassword] = useState('');
 
   // Document Upload State
   const [isUploadingDoc, setIsUploadingDoc] = useState(false);
   const [uploadCompanyId, setUploadCompanyId] = useState('');
-  const [docName, setDocName] = useState('');
   const [selectedMonth, setSelectedMonth] = useState(MONTHS[new Date().getMonth()]);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [previewFile, setPreviewFile] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadProgress, setUploadProgress] = useState({ done: 0, total: 0 });
   const [previewDoc, setPreviewDoc] = useState<TaxDocument | null>(null);
-  const docInputRef = useRef<HTMLInputElement>(null);
 
   // --- Company creation for existing client ---
   const [showCreateCompanyForClient, setShowCreateCompanyForClient] = useState<string | null>(null);
   const [companyForClientForm, setCompanyForClientForm] = useState({ name: '', ruc: '', businessName: '', taxAddress: '' });
   const [isSearchingRuc, setIsSearchingRuc] = useState(false);
+
+  // --- Facturación (emisión de comprobantes por el contador) ---
+  const [showInvoiceModal, setShowInvoiceModal] = useState<{ type: 'factura' | 'boleta' } | null>(null);
+  const [showNcModal, setShowNcModal] = useState(false);
+  const [showNdModal, setShowNdModal] = useState(false);
+  const [retryingInvoice, setRetryingInvoice] = useState<string | null>(null);
 
   const myCompanies = useMemo(() =>
     companies.filter(c => c.assignedAccountantId === currentUser?.id),
@@ -72,10 +86,84 @@ export const AccountantDashboard: React.FC = () => {
     return users.filter(u => u.role === UserRole.USER && clientIds.has(u.id));
   }, [users, myCompanies]);
 
+  const accountantActivePackage = useMemo(() => {
+    if (!currentUser) return null;
+    const today = new Date().toISOString().split('T')[0];
+    if (currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE && currentUser.subscriptionEndDate && currentUser.subscriptionEndDate >= today) {
+      const rec = subscriptionHistory.find(r => r.userId === currentUser.id && r.status === 'PAID' && r.endDate >= today);
+      if (rec) {
+        const found = packages.find(p => p.name === rec.packageName);
+        if (found) return found;
+      }
+    }
+    return packages.find(p => p.isFree || p.id === 'pkg-free-accountant') || null;
+  }, [currentUser, subscriptionHistory, packages]);
+
+  const getAcctLimitVal = (limitsObj: Record<string, Record<string, number>> | undefined, limitKey: string, role?: string): number | null => {
+    const targetRole = role || currentUser?.role;
+    if (!limitsObj || !limitsObj[limitKey] || !targetRole) return null;
+    const roleKey = (targetRole === UserRole.PERSONA_NATURAL || targetRole === UserRole.EMPRESARIO) ? UserRole.USER : targetRole;
+    const val = limitsObj[limitKey][targetRole] ?? limitsObj[limitKey][roleKey] ?? limitsObj[limitKey][UserRole.ACCOUNTANT] ?? limitsObj[limitKey][UserRole.USER];
+    return val !== undefined && val !== null ? val : null;
+  };
+
+  const managedCompaniesLimit = useMemo(() => getAcctLimitVal(accountantActivePackage?.limits, 'maxManagedCompanies'), [accountantActivePackage, currentUser]);
+
+  const isAtManagedCompaniesLimit = managedCompaniesLimit !== null && myCompanies.length >= managedCompaniesLimit;
+
+  const createdClientsLimit = useMemo(() => getAcctLimitVal(accountantActivePackage?.limits, 'maxCreatedClients'), [accountantActivePackage, currentUser]);
+
+  const myCreatedClients = useMemo(
+    () => users.filter(u => u.parentId === currentUser?.id && u.role === UserRole.USER),
+    [users, currentUser]
+  );
+  const isAtCreatedClientsLimit = createdClientsLimit !== null && myCreatedClients.length >= createdClientsLimit;
+
+  const handleResetPassword = async (id: string, name: string) => {
+    if (!confirm(`¿Restablecer la contraseña de "${name}"? Se le enviará una nueva por email y deberá cambiarla al iniciar sesión.`)) return;
+    const newPassword = await resetUserPassword(id);
+    if (!newPassword) alert('No se pudo restablecer la contraseña. Inténtalo nuevamente.');
+  };
+
+  const accountantTaxDocLimit = useMemo(() => getAcctLimitVal(accountantActivePackage?.limits, 'maxTaxDocuments'), [accountantActivePackage, currentUser]);
+
+  const myAccountantTaxDocs = useMemo(() => taxDocuments.filter(d => d.accountantId === currentUser?.id), [taxDocuments, currentUser]);
+  const isAtAccountantTaxDocLimit = accountantTaxDocLimit !== null && myAccountantTaxDocs.length >= accountantTaxDocLimit;
+
+  const clientOwner = useMemo(() => {
+    if (!selectedClientId) return null;
+    const clientCompany = myCompanies.find(c => c.ownerUserId === selectedClientId) || companies.find(c => c.ownerUserId === selectedClientId);
+    return clientCompany ? users.find(u => u.id === clientCompany.ownerUserId) : null;
+  }, [selectedClientId, myCompanies, companies, users]);
+
+  const clientActivePackage = useMemo(() => {
+    if (!clientOwner) return null;
+    const today = new Date().toISOString().split('T')[0];
+    if (clientOwner.subscriptionStatus === SubscriptionStatus.ACTIVE && clientOwner.subscriptionEndDate && clientOwner.subscriptionEndDate >= today) {
+      const rec = subscriptionHistory.find(r => r.userId === clientOwner.id && r.status === 'PAID' && r.endDate >= today);
+      if (rec) {
+        const found = packages.find(p => p.name === rec.packageName);
+        if (found) return found;
+      }
+    }
+    return packages.find(p => p.isFree || p.id === 'pkg-free-client') || null;
+  }, [clientOwner, subscriptionHistory, packages]);
+
+  const clientTaxDocLimit = useMemo(() => getAcctLimitVal(clientActivePackage?.limits, 'maxTaxDocuments', clientOwner?.role), [clientActivePackage, clientOwner]);
+
+  const clientTaxDocuments = useMemo(() => taxDocuments.filter(d => d.userId === selectedClientId), [taxDocuments, selectedClientId]);
+  const isAtClientTaxDocLimit = clientTaxDocLimit !== null && clientTaxDocuments.length >= clientTaxDocLimit;
+
+  // maxTaxDocumentsPerAccountant: comprobantes emitidos por un contador CREADO POR este cliente (empresario)
+  const isCreatedAccountantOfClient = currentUser?.parentId === clientOwner?.id;
+  const clientCreatedAcctDocLimit = useMemo(() => getAcctLimitVal(clientActivePackage?.limits, 'maxTaxDocumentsPerAccountant', clientOwner?.role), [clientActivePackage, clientOwner]);
+  const createdAcctDocs = useMemo(() => taxDocuments.filter(d => d.accountantId === currentUser?.id && d.userId === clientOwner?.id), [taxDocuments, currentUser, clientOwner]);
+  const isAtCreatedAcctDocLimit = isCreatedAccountantOfClient
+    ? clientCreatedAcctDocLimit !== null && createdAcctDocs.length >= clientCreatedAcctDocLimit
+    : false;
+
   const filteredCompanies = useMemo(() => {
-    const base = selectedCompanyId
-      ? myCompanies.filter(c => c.id === selectedCompanyId)
-      : myCompanies;
+    const base = myCompanies;
     if (!searchClient) return base;
     const q = searchClient.toLowerCase();
     return base.filter(c => {
@@ -85,7 +173,7 @@ export const AccountantDashboard: React.FC = () => {
         (c.businessName && c.businessName.toLowerCase().includes(q)) ||
         (owner?.name && owner.name.toLowerCase().includes(q));
     });
-  }, [myCompanies, selectedCompanyId, users, searchClient]);
+  }, [myCompanies, users, searchClient]);
 
   const handleCreateCompanyForClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,6 +187,16 @@ export const AccountantDashboard: React.FC = () => {
       taxAddress: companyForClientForm.taxAddress,
       assignedAccountantId: currentUser.id,
     };
+    const selClient = users.find(u => u.id === showCreateCompanyForClient);
+    const isCreatedClientOfAcct = selClient?.parentId === currentUser?.id;
+    if (isCreatedClientOfAcct && accountantActivePackage?.limits?.maxCompaniesPerCreatedClient && accountantActivePackage.limits.maxCompaniesPerCreatedClient[currentUser.role] != null) {
+      const createdClientLimit = accountantActivePackage.limits.maxCompaniesPerCreatedClient[currentUser.role];
+      const createdClientCompanyCount = companies.filter(c => c.ownerUserId === showCreateCompanyForClient).length;
+      if (createdClientCompanyCount >= createdClientLimit) {
+        alert(`Este cliente ha alcanzado el límite de empresas (${createdClientLimit}) definido en tu plan.`);
+        return;
+      }
+    }
     addCompany(newCompany);
     selectCompany(newCompany.id);
     setCompanyForClientForm({ name: '', ruc: '', businessName: '', taxAddress: '' });
@@ -123,20 +221,216 @@ export const AccountantDashboard: React.FC = () => {
     }
   };
 
+  // ─── Facturación: empresa cliente activa ───
+  const clientCompany = selectedClientId ? myCompanies.find(c => c.ownerUserId === selectedClientId) : null;
+  const clientUser = selectedClientId ? users.find(u => u.id === selectedClientId) : null;
+
+  // ─── Facturación: handler de comprobantes emitidos por el contador ───
+  const handleAccountantInvoiceEmitted = (result: { id: string; name: string; sunatStatus: string; xmlContent?: string; cdrBase64?: string; amount?: number; customerName?: string; customerRuc?: string; documentType?: TaxDocument['documentType']; originalDocumentId?: string }) => {
+    if (!clientCompany || !currentUser) return;
+
+    if (isAtClientTaxDocLimit) {
+      alert(`Tu cliente ha alcanzado el límite de comprobantes (${clientTaxDocLimit}) de su plan.`);
+      return;
+    }
+
+    if (isAtAccountantTaxDocLimit) {
+      alert(`Has alcanzado tu límite de comprobantes (${accountantTaxDocLimit}) de tu plan.`);
+      return;
+    }
+    if (isAtCreatedAcctDocLimit) {
+      alert(`Tu cliente ha alcanzado el límite de comprobantes por contador creado (${clientCreatedAcctDocLimit}) de su plan.`);
+      return;
+    }
+
+    let xmlUrl = '';
+    if (result.xmlContent) {
+      try { xmlUrl = URL.createObjectURL(new Blob([result.xmlContent], { type: 'text/xml' })); } catch {}
+    }
+    let cdrUrl = '';
+    if (result.cdrBase64) {
+      try {
+        const binary = atob(result.cdrBase64);
+        const array = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+        cdrUrl = URL.createObjectURL(new Blob([array], { type: 'application/zip' }));
+      } catch {}
+    }
+
+    const isInternal = result.sunatStatus === 'INTERNO';
+    const newDoc: TaxDocument = {
+      id: result.id,
+      userId: clientCompany.ownerUserId,
+      companyId: clientCompany.id,
+      accountantId: currentUser.id,
+      name: result.name,
+      fileUrl: '',
+      pdfUrl: '',
+      xmlUrl,
+      cdrUrl,
+      xmlContent: result.xmlContent,
+      cdrBase64: result.cdrBase64,
+      mimeType: 'application/xml',
+      uploadDate: new Date().toISOString().split('T')[0],
+      periodMonth: new Date().toLocaleDateString('es-ES', { month: 'long' }),
+      periodYear: new Date().getFullYear(),
+      sunatStatus: isInternal ? 'INTERNO' : (result.sunatStatus === 'ACEPTADO' || result.sunatStatus === 'SENT') ? 'SENT' : 'PENDING',
+      sunatHash: (result.sunatStatus === 'ACEPTADO' || result.sunatStatus === 'SENT') ? Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join('') : undefined,
+      documentType: result.documentType,
+      originalDocumentId: result.originalDocumentId,
+      metadata: { amount: result.amount, recipientName: result.customerName, recipientRuc: result.customerRuc || '', description: '', retention: 0, netAmount: result.amount || 0, date: '' }
+    };
+    addTaxDocument(newDoc);
+
+    if (clientUser) {
+      addNotification({
+        id: `notif-${Date.now()}`,
+        userId: clientUser.id,
+        message: `Tu contador emitió: ${result.name}`,
+        date: new Date().toLocaleString('es-ES'),
+        isRead: false,
+        type: 'ACCOUNTANT_DOC'
+      });
+    }
+  };
+
+  // ─── Facturación: reintentos de facturas pendientes (duplicado desde UserDashboard) ───
+  const getMaxRetryAttempts = () => 5;
+
+  const retryPendingInvoice = async (inv: PendingInvoice) => {
+    if ((inv.attemptCount || 0) >= getMaxRetryAttempts()) return;
+    setRetryingInvoice(inv.id);
+    updatePendingInvoiceStatus(inv.id, 'ENVIANDO');
+    try {
+      const isNCND = inv.documentType === 'nota_credito' || inv.documentType === 'nota_debito';
+      const endpoint = isNCND ? '/emitir-nota' : '/emitir-factura';
+      const company = companies.find(c => c.id === inv.companyId) || clientCompany || undefined;
+      const credentials = {
+        ruc: company?.ruc,
+        user: company?.solUser,
+        pass: company?.solPass,
+        certBase64: company?.certBase64,
+        certPass: company?.certPass,
+        env: company?.sunatEnv || 'SANDBOX'
+      };
+      const body = isNCND ? {
+        noteType: inv.documentType,
+        noteData: inv.payload,
+        credentials: inv.payload.credentials || credentials
+      } : inv.payload;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const result = await response.json();
+      if (result.success) {
+        removePendingInvoice(inv.id);
+        const paddedCorr = typeof inv.correlative === 'number' ? String(inv.correlative).padStart(8, '0') : '00000001';
+        const isNCND = inv.documentType === 'nota_credito' || inv.documentType === 'nota_debito';
+        const docName = isNCND ? `${inv.documentType === 'nota_credito' ? 'N. Crédito' : 'N. Débito'} ${inv.serie}-${paddedCorr}` : `${inv.serie}-${paddedCorr}`;
+        const newDoc: TaxDocument = {
+          id: inv.id,
+          userId: inv.userId,
+          companyId: inv.companyId || clientCompany?.id || '',
+          accountantId: currentUser?.id || '',
+          name: docName,
+          fileUrl: '',
+          pdfUrl: '',
+          xmlUrl: result.xmlContent ? URL.createObjectURL(new Blob([result.xmlContent], { type: 'text/xml' })) : '',
+          cdrUrl: result.cdrBase64 ? URL.createObjectURL(new Blob([Uint8Array.from(atob(result.cdrBase64), c => c.charCodeAt(0))], { type: 'application/zip' })) : '',
+          xmlContent: result.xmlContent,
+          cdrBase64: result.cdrBase64,
+          mimeType: 'application/xml',
+          uploadDate: new Date().toISOString().split('T')[0],
+          periodMonth: new Date().toLocaleDateString('es-ES', { month: 'long' }),
+          periodYear: new Date().getFullYear(),
+          sunatStatus: 'SENT',
+          sunatHash: Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join(''),
+          documentType: isNCND ? inv.documentType : undefined,
+          originalDocumentId: inv.originalDocumentId,
+          uploadedBy: 'ACCOUNTANT'
+        };
+        addTaxDocument(newDoc);
+        if (clientUser) {
+          addNotification({
+            id: `notif-${Date.now()}`,
+            userId: clientUser.id,
+            message: `Se reintentó y aceptó: ${inv.id}`,
+            date: new Date().toLocaleString('es-ES'),
+            isRead: false,
+            type: 'ACCOUNTANT_DOC'
+          });
+        }
+      } else {
+        updatePendingInvoiceStatus(inv.id, 'PENDIENTE', result.error || 'Error del servidor SUNAT');
+      }
+    } catch (err: any) {
+      updatePendingInvoiceStatus(inv.id, 'PENDIENTE', 'Error de conexión: ' + (err.message || 'Desconocido'));
+    } finally { setRetryingInvoice(null); }
+  };
+
+  const retryAllPending = async () => {
+    if (isAtClientTaxDocLimit) {
+      alert(`Tu cliente ha alcanzado el límite de comprobantes (${clientTaxDocLimit}) de su plan.`);
+      return;
+    }
+
+    if (isAtAccountantTaxDocLimit) {
+      alert(`Has alcanzado tu límite de comprobantes (${accountantTaxDocLimit}) de tu plan.`);
+      return;
+    }
+    if (isAtCreatedAcctDocLimit) {
+      alert(`Tu cliente ha alcanzado el límite de comprobantes por contador creado (${clientCreatedAcctDocLimit}) de su plan.`);
+      return;
+    }
+    const companyIds = myCompanies.map(c => c.id);
+    const pending = pendingInvoices.filter(p =>
+      (p.status === 'PENDIENTE' || p.status === 'RECHAZADO') &&
+      (p.attemptCount || 0) < getMaxRetryAttempts() &&
+      p.companyId && companyIds.includes(p.companyId)
+    );
+    for (const inv of pending) {
+      await retryPendingInvoice(inv);
+    }
+  };
+
+  // Auto-reintento cada 30s de pendientes de empresas del contador
+  useEffect(() => {
+    const companyIds = myCompanies.map(c => c.id);
+    const pending = pendingInvoices.filter(p =>
+      (p.status === 'PENDIENTE') && (p.attemptCount || 0) < getMaxRetryAttempts() &&
+      p.companyId && companyIds.includes(p.companyId)
+    );
+    if (pending.length === 0) return;
+    const timer = setTimeout(() => {
+      pending.forEach(inv => {
+        if (inv.id !== retryingInvoice) retryPendingInvoice(inv);
+      });
+    }, 30000);
+    return () => clearTimeout(timer);
+  }, [pendingInvoices, myCompanies]);
+
   // ─── Clientes: obtener resumen del mes actual ───
   const getCompanyMonthStats = (companyId: string) => {
     const now = new Date();
+    const monthStr = now.toISOString().slice(0, 7);
     const monthExpenses = expenses.filter(e =>
       e.companyId === companyId && !e.isPrivate &&
-      e.date.startsWith(now.toISOString().slice(0, 7))
+      e.date.startsWith(monthStr)
     );
     const company = myCompanies.find(c => c.id === companyId);
     const docs = taxDocuments.filter(d =>
-      d.userId === company?.ownerUserId && d.companyId === companyId && d.sunatStatus !== 'INTERNO' &&
-      d.uploadDate?.startsWith(now.toISOString().slice(0, 7))
+      d.userId === company?.ownerUserId && d.companyId === companyId && d.sunatStatus !== 'INTERNO' && d.sunatStatus !== 'BORRADO' &&
+      (d.uploadDate?.startsWith(monthStr) || (d.periodYear === now.getFullYear() && d.periodMonth.toLowerCase() === MONTHS[now.getMonth()].toLowerCase()))
     );
+
+    const totalVentas = docs.reduce((s, d) => s + getDocAmount(d), 0);
+    const totalGastos = monthExpenses.reduce((s, e) => s + e.amount, 0);
+
     return {
-      totalGastos: monthExpenses.reduce((s, e) => s + e.amount, 0),
+      totalVentas,
+      totalGastos,
       cantDocs: docs.length,
       cantGastos: monthExpenses.length,
       ultimoMovimiento: monthExpenses.length > 0
@@ -149,7 +443,11 @@ export const AccountantDashboard: React.FC = () => {
   const handleCreateClient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
-    const pwd = generatedPassword || generatePassword();
+    if (isAtCreatedClientsLimit) {
+      alert(String.fromCharCode(72,97,115,32,97,108,99,104,97,110,122,97,100,111,32,101,108,32,108,237,109,105,116,101,32,100,101,32,99,108,105,101,110,116,101,115,32,97,32,99,114,101,97,114,32,40) + createdClientsLimit + String.fromCharCode(41,32,100,101,32,116,117,32,112,108,97,110,46));
+      return;
+    }
+    const pwd = generatePassword();
     const newUserId = Date.now().toString();
     const newUser = {
       id: newUserId,
@@ -159,6 +457,7 @@ export const AccountantDashboard: React.FC = () => {
       password: pwd,
       mustChangePassword: true,
       subscriptionStatus: SubscriptionStatus.PENDING,
+      parentId: currentUser.id
     };
     const newCompany: Company = {
       id: `comp-${newUserId}`,
@@ -179,86 +478,80 @@ export const AccountantDashboard: React.FC = () => {
         body: JSON.stringify({ email: newUser.email, name: newUser.name, password: pwd })
       }).catch(() => {});
       setNewClientData({ name: '', email: '', ruc: '', dni: '', businessName: '', taxAddress: '' });
-      setGeneratedPassword('');
       setShowCreateClientModal(false);
     } catch (err: any) {
       alert("Error al registrar cliente en la base de datos: " + (err.message || "Error de conexión"));
     }
   };
 
-  // ─── Handle Doc Upload ───
-  const handleDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // ─── Handle Doc Upload (multi-file) ───
+  const handleDocUpload = async () => {
     try {
-      if (!e.target.files || !e.target.files[0] || !currentUser) return;
-      const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.onload = () => {
+      if (!selectedFiles.length || !currentUser) return;
+      const targetCompanyId = uploadCompanyId || (selectedClientId
+        ? myCompanies.find(c => c.ownerUserId === selectedClientId)?.id || ''
+        : '');
+      const company = myCompanies.find(c => c.id === targetCompanyId);
+      if (!company) { alert('Selecciona una empresa'); return; }
+
+      setUploadProgress({ done: 0, total: selectedFiles.length });
+      setIsUploadingDoc(true);
+      const uploadedNames: string[] = [];
+      const failedNames: string[] = [];
+
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
         try {
-          const base64 = (reader.result as string).split(',')[1];
-          const targetCompanyId = uploadCompanyId || (selectedClientId
-            ? myCompanies.find(c => c.ownerUserId === selectedClientId)?.id || ''
-            : '');
-          const company = myCompanies.find(c => c.id === targetCompanyId);
-          if (!company) { alert('Selecciona una empresa'); return; }
-          const finalName = docName || file.name;
+          const base64 = await readFileAsBase64(file);
+          const { folderPath, name } = parseUploadName(file.name);
+          const subFolder = folderPath.split('/')[1] || '';
+          const period = derivePeriod(subFolder) || { month: selectedMonth, year: selectedYear };
           const newDoc: TaxDocument = {
-            id: Date.now().toString(),
+            id: `${Date.now()}-${i}`,
             userId: company.ownerUserId,
             companyId: company.id,
             accountantId: currentUser.id,
-            name: finalName,
+            name,
+            folderPath: folderPath || undefined,
             fileUrl: base64,
             mimeType: file.type,
             uploadDate: new Date().toISOString().split('T')[0],
-            periodMonth: selectedMonth,
-            periodYear: selectedYear,
+            periodMonth: period.month,
+            periodYear: period.year,
             uploadedBy: 'ACCOUNTANT'
           };
           addTaxDocument(newDoc);
           addNotification({
-            id: `notif-${Date.now()}`,
+            id: `notif-${Date.now()}-${i}`,
             userId: company.ownerUserId,
-            message: `Tu contador te envió: ${finalName}`,
+            message: `Tu contador te envió: ${name}${folderPath ? ` (${folderPath})` : ''}`,
             date: new Date().toLocaleString('es-ES'),
             isRead: false,
             type: 'ACCOUNTANT_DOC'
           });
-          setDocName('');
-          setPreviewFile(null);
-          setIsUploadingDoc(false);
+          uploadedNames.push(name);
         } catch (innerErr) {
-          console.error('Error al procesar documento:', innerErr);
-          alert('Error al procesar el archivo. Intenta con un archivo más pequeño.');
-          setIsUploadingDoc(false);
+          console.error('Error al procesar archivo:', file.name, innerErr);
+          failedNames.push(file.name);
         }
-      };
-      reader.onerror = () => {
-        console.error('Error al leer archivo');
-        alert('No se pudo leer el archivo. Intenta de nuevo.');
-        setIsUploadingDoc(false);
-      };
-      reader.readAsDataURL(file);
+        setUploadProgress({ done: i + 1, total: selectedFiles.length });
+      }
+
+      setIsUploadingDoc(false);
+      setSelectedFiles([]);
+      setUploadProgress({ done: 0, total: 0 });
+
+      if (failedNames.length === 0) {
+        alert(`Se subieron ${uploadedNames.length} documento(s) correctamente.`);
+      } else if (uploadedNames.length > 0) {
+        alert(`${uploadedNames.length} subidos. Fallaron: ${failedNames.join(', ')}`);
+      } else {
+        alert('No se pudo subir ningún documento.');
+      }
     } catch (err) {
       console.error('Error en handleDocUpload:', err);
-      alert('Error inesperado al subir el documento.');
+      alert('Error inesperado al subir los documentos.');
       setIsUploadingDoc(false);
-    }
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      if (file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = () => setPreviewFile(reader.result as string);
-        reader.readAsDataURL(file);
-      } else {
-        setPreviewFile(null);
-      }
-      // Store file for later upload
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      if (docInputRef.current) docInputRef.current.files = dt.files;
     }
   };
 
@@ -356,11 +649,21 @@ export const AccountantDashboard: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <h2 className="text-2xl font-black text-gray-800">Mis Clientes</h2>
-        {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE && (
-          <button onClick={() => { setGeneratedPassword(generatePassword()); setShowCreateClientModal(true); }}
+        {currentUser.subscriptionStatus === SubscriptionStatus.ACTIVE && !isAtManagedCompaniesLimit && !isAtCreatedClientsLimit && (
+          <button onClick={() => setShowCreateClientModal(true)}
             className="bg-brand-600 text-white px-5 py-3 rounded-xl hover:bg-brand-700 transition flex items-center font-bold text-sm shadow-lg shadow-brand-100">
             <UserPlus className="w-4 h-4 mr-2" /> Nuevo Cliente
           </button>
+        )}
+        {isAtManagedCompaniesLimit && (
+          <p className="text-sm text-amber-600 font-medium">
+            Has alcanzado el límite de empresas a gestionar ({managedCompaniesLimit}) de tu plan
+          </p>
+        )}
+        {isAtCreatedClientsLimit && (
+          <p className="text-sm text-amber-600 font-medium">
+            Has alcanzado el límite de clientes a crear ({createdClientsLimit}) de tu plan
+          </p>
         )}
       </div>
       <div className="relative max-w-md">
@@ -394,20 +697,30 @@ export const AccountantDashboard: React.FC = () => {
                 <h3 className="font-black text-gray-900 text-sm uppercase truncate">{company.businessName || company.name}</h3>
                 <p className="text-[10px] text-gray-500 font-bold truncate">{owner?.name || 'Sin dueño'}</p>
                 <p className="text-[10px] text-gray-400 font-mono mt-1">RUC: {company.ruc || '—'}</p>
-                <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-2 gap-3 text-center">
+                <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-3 gap-2 text-center">
                   <div>
-                    <p className="text-lg font-black text-brand-600">S/ {(stats.totalGastos || 0).toFixed(2)}</p>
+                    <p className="text-base font-black text-green-600">S/ {(stats.totalVentas || 0).toFixed(2)}</p>
+                    <p className="text-[8px] text-gray-400 font-black uppercase">Ventas Mes</p>
+                  </div>
+                  <div>
+                    <p className="text-base font-black text-brand-600">S/ {(stats.totalGastos || 0).toFixed(2)}</p>
                     <p className="text-[8px] text-gray-400 font-black uppercase">Gastos Mes</p>
                   </div>
                   <div>
-                    <p className="text-lg font-black text-gray-700">{stats.cantDocs}</p>
+                    <p className="text-base font-black text-gray-700">{stats.cantDocs}</p>
                     <p className="text-[8px] text-gray-400 font-black uppercase">Documentos</p>
                   </div>
                 </div>
                 {stats.ultimoMovimiento && (
                   <p className="text-[8px] text-gray-400 mt-3 text-center">Último: {stats.ultimoMovimiento}</p>
                 )}
-                <button onClick={() => { setSelectedClientId(company.ownerUserId); setActiveTab('clientes'); }}
+                {owner && owner.parentId === currentUser.id && (
+                  <button onClick={() => handleResetPassword(owner.id, owner.name)}
+                    className="mt-3 w-full py-2 bg-amber-50 text-amber-600 rounded-xl font-black text-[10px] uppercase hover:bg-amber-100 transition border border-amber-200 flex items-center justify-center">
+                    <Lock className="w-3.5 h-3.5 mr-1.5" /> Cambiar Contraseña
+                  </button>
+                )}
+                <button onClick={() => { setSelectedClientId(company.ownerUserId); setClientView('movimientos'); }}
                   className="mt-4 w-full py-2.5 bg-gray-50 text-gray-600 rounded-xl font-black text-[10px] uppercase hover:bg-brand-50 hover:text-brand-600 transition border border-gray-200">
                   Ver Movimientos
                 </button>
@@ -424,11 +737,12 @@ export const AccountantDashboard: React.FC = () => {
     if (!selectedClientId) return null;
     const client = users.find(u => u.id === selectedClientId);
     if (!client) return <div className="py-10 text-center text-gray-400">Cliente no encontrado</div>;
-    const clientCompany = myCompanies.find(c => c.ownerUserId === client.id);
 
     const filteredExpenses = expenses
       .filter(e => {
         if (e.userId !== selectedClientId || e.isPrivate) return false;
+        if (clientCompany?.id && e.companyId !== clientCompany.id) return false;
+        if (['Facturación Electrónica', 'Ventas', 'Ingresos'].includes(e.category)) return false;
         const matchingDoc = taxDocuments.find(d => d.id === e.invoiceNumber);
         if (matchingDoc && matchingDoc.sunatStatus === 'INTERNO') return false;
         return e.date.startsWith(`${movFilterYear}-${String(MONTHS.indexOf(movFilterMonth) + 1).padStart(2, '0')}`);
@@ -436,7 +750,9 @@ export const AccountantDashboard: React.FC = () => {
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     const clientDocs = taxDocuments
-      .filter(d => d.userId === selectedClientId && d.sunatStatus !== 'INTERNO')
+      .filter(d => (d.userId === selectedClientId || (clientCompany?.id && d.companyId === clientCompany.id)) && d.sunatStatus !== 'INTERNO' &&
+        (d.uploadDate?.startsWith(`${movFilterYear}-${String(MONTHS.indexOf(movFilterMonth) + 1).padStart(2, '0')}`) ||
+         (d.periodYear === movFilterYear && d.periodMonth.toLowerCase() === movFilterMonth.toLowerCase())))
       .sort((a, b) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime());
 
     const totals = filteredExpenses.reduce((acc, exp) => {
@@ -445,35 +761,27 @@ export const AccountantDashboard: React.FC = () => {
       return { subtotal: acc.subtotal + sub, igv: acc.igv + igv, total: acc.total + exp.amount };
     }, { subtotal: 0, igv: 0, total: 0 });
 
+    const totalVentasEmitidas = clientDocs.reduce((acc, doc) => acc + getDocAmount(doc), 0);
+
     return (
-      <div className="space-y-6 animate-fade-in">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center space-x-4">
-            <button onClick={() => setSelectedClientId(null)} className="p-2 hover:bg-gray-100 rounded-full transition">
-              <ArrowLeft className="w-6 h-6" />
-            </button>
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900">{client.name}</h2>
-              <p className="text-gray-500 text-sm">RUC: <span className="font-mono">{clientCompany?.ruc || 'No registrado'}</span> | {clientCompany?.businessName || 'Persona Natural'}</p>
-            </div>
+      <div className="space-y-6">
+        {/* Filtros mes/año + Exportar */}
+        <div className="flex flex-wrap gap-3 items-center justify-between">
+          <div className="flex gap-3 items-center">
+            <Filter className="w-4 h-4 text-gray-400" />
+            <select className="bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold outline-none"
+              value={movFilterMonth} onChange={e => { setMovFilterMonth(e.target.value); setRepMonth(e.target.value); }}>
+              {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <select className="bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold outline-none"
+              value={movFilterYear} onChange={e => { const y = Number(e.target.value); setMovFilterYear(y); setRepYear(y); }}>
+              {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
           </div>
           <button onClick={() => exportToExcel(client.name, filteredExpenses)}
             className="bg-green-600 text-white px-4 py-2 rounded-xl hover:bg-green-700 transition flex items-center font-bold text-sm shadow-lg shadow-green-100">
             <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
           </button>
-        </div>
-
-        {/* Filtros mes/año */}
-        <div className="flex gap-3 items-center">
-          <Filter className="w-4 h-4 text-gray-400" />
-          <select className="bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold outline-none"
-            value={movFilterMonth} onChange={e => setMovFilterMonth(e.target.value)}>
-            {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <select className="bg-white border-2 border-gray-200 p-2 rounded-lg text-xs font-bold outline-none"
-            value={movFilterYear} onChange={e => setMovFilterYear(Number(e.target.value))}>
-            {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
@@ -514,41 +822,148 @@ export const AccountantDashboard: React.FC = () => {
               )}
             </div>
 
-            {/* Documentos Tributarios */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="p-4 border-b bg-gray-50">
-                <h3 className="font-black text-gray-700 flex items-center text-xs uppercase tracking-widest">
-                  <FileText className="w-4 h-4 mr-2 text-blue-600" />
-                  Documentos Tributarios ({clientDocs.length})
-                </h3>
-              </div>
-              {clientDocs.length === 0 ? (
-                <div className="py-8 text-center text-gray-400 italic text-sm">Sin documentos registrados.</div>
-              ) : (
-                <div className="divide-y divide-gray-100 max-h-64 overflow-y-auto">
-                  {clientDocs.map(doc => (
-                    <div key={doc.id} onClick={() => setPreviewDoc(doc)} className="p-4 flex items-center justify-between hover:bg-gray-50 cursor-pointer">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-blue-50 rounded-lg">
-                          <ReceiptText className="w-4 h-4 text-blue-600" />
-                        </div>
-                        <div>
-                          <p className="text-xs font-bold text-gray-900 uppercase">{doc.name}</p>
-                          <p className="text-[9px] text-gray-400">{doc.periodMonth} {doc.periodYear} · {doc.uploadDate}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {doc.sunatStatus && (
-                          <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${doc.sunatStatus === 'ACEPTADO' || doc.sunatStatus === 'SENT' ? 'bg-green-100 text-green-700' : doc.sunatStatus === 'INTERNO' ? 'bg-amber-100 text-amber-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                            {doc.sunatStatus}
-                          </span>
-                        )}
-                      </div>
+            {/* Documentos Tributarios con Pestañas Principales */}
+            {(() => {
+              const isComprobanteDePago = (d: TaxDocument) => {
+                if (['factura', 'boleta', 'nota_credito', 'nota_debito', 'rh'].includes(d.documentType || '')) return true;
+                const name = (d.name || '').toUpperCase();
+                const id = (d.id || '').toUpperCase();
+                if (id.startsWith('F') || id.startsWith('B') || id.startsWith('NC-') || id.startsWith('ND-') || id.startsWith('RH-')) return true;
+                if (name.startsWith('FACTURA') || name.startsWith('BOLETA') || name.startsWith('N. CRÉDITO') || name.startsWith('N. DÉBITO') || name.startsWith('RECIBO')) return true;
+                return false;
+              };
+
+              const comprobantesDocs = clientDocs.filter(d => isComprobanteDePago(d));
+              const contadorDocs = clientDocs.filter(d => d.uploadedBy === 'ACCOUNTANT' && !isComprobanteDePago(d));
+              const empresarioDocs = clientDocs.filter(d => (d.uploadedBy === 'USER' || d.uploadedBy !== 'ACCOUNTANT') && !isComprobanteDePago(d));
+
+              let currentList: TaxDocument[] = [];
+              if (acctMainTab === 'comprobantes') {
+                currentList = comprobantesDocs.filter(d => {
+                  if (acctSubTab === 'all') return true;
+                  if (acctSubTab === 'factura') return d.documentType === 'factura' || d.name.startsWith('F') || d.id.startsWith('F');
+                  if (acctSubTab === 'boleta') return d.documentType === 'boleta' || d.name.startsWith('B') || d.id.startsWith('B');
+                  if (acctSubTab === 'nc') return d.documentType === 'nota_credito' || d.id.startsWith('NC-');
+                  if (acctSubTab === 'nd') return d.documentType === 'nota_debito' || d.id.startsWith('ND-');
+                  return true;
+                });
+              } else if (acctMainTab === 'contador') {
+                currentList = contadorDocs;
+              } else {
+                currentList = empresarioDocs;
+              }
+
+              return (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div className="p-4 border-b bg-gray-50 flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="font-black text-gray-700 flex items-center text-xs uppercase tracking-widest">
+                      <FileText className="w-4 h-4 mr-2 text-blue-600" />
+                      Documentos y Comprobantes ({clientDocs.length})
+                    </h3>
+                    <button
+                      onClick={() => setShowFileTreeModal(true)}
+                      className="bg-brand-600 text-white px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-brand-700 transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                    >
+                      <FolderTree className="w-3.5 h-3.5" /> Árbol de Documentos
+                    </button>
+                  </div>
+
+                  {/* Pestañas Principales */}
+                  <div className="grid grid-cols-3 bg-gray-100 p-1.5 border-b border-gray-200 gap-1">
+                    <button
+                      onClick={() => setAcctMainTab('comprobantes')}
+                      className={`py-2 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-1.5 ${
+                        acctMainTab === 'comprobantes'
+                          ? 'bg-white text-brand-600 shadow-sm border border-gray-200'
+                          : 'text-gray-500 hover:text-gray-800'
+                      }`}
+                    >
+                      Comprobantes de Pago <span className="text-[10px] bg-brand-50 text-brand-700 px-2 py-0.5 rounded-full font-black">{comprobantesDocs.length}</span>
+                    </button>
+                    <button
+                      onClick={() => setAcctMainTab('contador')}
+                      className={`py-2 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-1.5 ${
+                        acctMainTab === 'contador'
+                          ? 'bg-white text-blue-600 shadow-sm border border-gray-200'
+                          : 'text-gray-500 hover:text-gray-800'
+                      }`}
+                    >
+                      Archivos del Contador <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-black">{contadorDocs.length}</span>
+                    </button>
+                    <button
+                      onClick={() => setAcctMainTab('empresario')}
+                      className={`py-2 rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-1.5 ${
+                        acctMainTab === 'empresario'
+                          ? 'bg-white text-gray-900 shadow-sm border border-gray-200'
+                          : 'text-gray-500 hover:text-gray-800'
+                      }`}
+                    >
+                      Archivos del Empresario <span className="text-[10px] bg-gray-200 text-gray-800 px-2 py-0.5 rounded-full font-black">{empresarioDocs.length}</span>
+                    </button>
+                  </div>
+
+                  {/* Sub-pestañas para Comprobantes de Pago */}
+                  {acctMainTab === 'comprobantes' && (
+                    <div className="flex bg-gray-50 p-1.5 overflow-x-auto border-b border-gray-200 gap-1">
+                      {[
+                        { id: 'all', label: 'Todos Comprobantes', count: comprobantesDocs.length },
+                        { id: 'factura', label: 'Facturas', count: comprobantesDocs.filter(d => d.documentType === 'factura' || d.name.startsWith('F') || d.id.startsWith('F')).length },
+                        { id: 'boleta', label: 'Boletas', count: comprobantesDocs.filter(d => d.documentType === 'boleta' || d.name.startsWith('B') || d.id.startsWith('B')).length },
+                        { id: 'nc', label: 'Notas de Crédito', count: comprobantesDocs.filter(d => d.documentType === 'nota_credito' || d.id.startsWith('NC-')).length },
+                        { id: 'nd', label: 'Notas de Débito', count: comprobantesDocs.filter(d => d.documentType === 'nota_debito' || d.id.startsWith('ND-')).length },
+                      ].map(sub => (
+                        <button
+                          key={sub.id}
+                          onClick={() => setAcctSubTab(sub.id as any)}
+                          className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase transition-all whitespace-nowrap ${
+                            acctSubTab === sub.id
+                              ? 'bg-brand-600 text-white shadow-sm'
+                              : 'bg-white text-gray-500 hover:text-gray-800 border border-gray-200'
+                          }`}
+                        >
+                          {sub.label} ({sub.count})
+                        </button>
+                      ))}
                     </div>
-                  ))}
+                  )}
+
+                  {currentList.length === 0 ? (
+                    <div className="py-8 text-center text-gray-400 italic text-sm">Sin documentos en esta sección.</div>
+                  ) : (
+                    <div className="divide-y divide-gray-100 max-h-80 overflow-y-auto">
+                      {currentList.map(doc => (
+                        <div key={doc.id} onClick={() => setPreviewDoc(doc)} className="p-3.5 flex items-center justify-between hover:bg-brand-50/50 cursor-pointer transition">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className={`p-2 rounded-lg ${doc.uploadedBy === 'ACCOUNTANT' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-brand-600'}`}>
+                              {doc.uploadedBy === 'ACCOUNTANT' ? <UserIcon className="w-4 h-4"/> : <ReceiptText className="w-4 h-4"/>}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <p className="text-xs font-bold text-gray-900 uppercase truncate">{doc.name}</p>
+                                {doc.uploadedBy === 'ACCOUNTANT' && (
+                                  <span className="text-[8px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-black uppercase shrink-0">CONTADOR</span>
+                                )}
+                              </div>
+                              <p className="text-[9px] text-gray-400">{doc.folderPath ? `${doc.folderPath} · ` : ''}{doc.periodMonth} {doc.periodYear} · {doc.uploadDate}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {doc.metadata?.amount && (
+                              <span className="text-xs font-black text-gray-800">S/ {doc.metadata.amount.toFixed(2)}</span>
+                            )}
+                            {doc.sunatStatus && (
+                              <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${(doc.sunatStatus as any) === 'ACEPTADO' || doc.sunatStatus === 'SENT' ? 'bg-green-100 text-green-700' : doc.sunatStatus === 'INTERNO' ? 'bg-amber-100 text-amber-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                                {doc.sunatStatus}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })()}
           </div>
 
           {/* Panel totales */}
@@ -556,21 +971,31 @@ export const AccountantDashboard: React.FC = () => {
             <h4 className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Totales del Período</h4>
             <div className="space-y-3">
               <div className="flex justify-between items-center pb-2 border-b border-gray-100">
-                <span className="text-xs text-gray-500 font-bold">Subtotal</span>
+                <span className="text-xs text-gray-500 font-bold">Subtotal Compras</span>
                 <span className="text-sm font-black text-gray-800">S/ {totals.subtotal.toFixed(2)}</span>
               </div>
               <div className="flex justify-between items-center pb-2 border-b border-gray-100">
-                <span className="text-xs text-gray-500 font-bold">IGV (18%)</span>
+                <span className="text-xs text-gray-500 font-bold">IGV Compras (18%)</span>
                 <span className="text-sm font-black text-gray-800">S/ {totals.igv.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between items-center pt-1">
-                <span className="text-sm font-black text-gray-800">Total</span>
+              <div className="flex justify-between items-center pb-2 border-b border-gray-100">
+                <span className="text-sm font-black text-gray-800">Total Compras</span>
                 <span className="text-lg font-black text-brand-600">S/ {totals.total.toFixed(2)}</span>
               </div>
+              <div className="pt-2 flex justify-between items-center">
+                <span className="text-xs text-gray-600 font-bold">Total Ventas Emitidas</span>
+                <span className="text-base font-black text-green-600">S/ {totalVentasEmitidas.toFixed(2)}</span>
+              </div>
             </div>
-            <div className="pt-4 border-t border-gray-100">
-              <p className="text-[9px] text-gray-400 font-bold uppercase">Cantidad Gastos</p>
-              <p className="text-xl font-black text-gray-800">{filteredExpenses.length}</p>
+            <div className="pt-4 border-t border-gray-100 grid grid-cols-2 gap-2 text-center">
+              <div>
+                <p className="text-[9px] text-gray-400 font-bold uppercase">Cant. Compras</p>
+                <p className="text-xl font-black text-gray-800">{filteredExpenses.length}</p>
+              </div>
+              <div>
+                <p className="text-[9px] text-gray-400 font-bold uppercase">Cant. Ventas</p>
+                <p className="text-xl font-black text-gray-800">{clientDocs.length}</p>
+              </div>
             </div>
           </div>
         </div>
@@ -662,38 +1087,50 @@ export const AccountantDashboard: React.FC = () => {
 
   // ─── View: Reporte Mensual ───
   const getDocAmount = (d: TaxDocument): number => {
+    let amt = 0;
     if (d.metadata) {
       if (typeof d.metadata === 'object' && d.metadata.amount !== undefined) {
-        return Number(d.metadata.amount) || 0;
-      }
-      if (typeof d.metadata === 'string') {
+        amt = Number(d.metadata.amount) || 0;
+      } else if (typeof d.metadata === 'string') {
         try {
           const p = JSON.parse(d.metadata);
-          if (p.amount !== undefined) return Number(p.amount) || 0;
+          if (p.amount !== undefined) amt = Number(p.amount) || 0;
         } catch {}
       }
-    }
-    if (d.xmlContent) {
+    } else if (d.xmlContent) {
       const match = d.xmlContent.match(/<cbc:PayableAmount[^>]*>([^<]+)<\/cbc:PayableAmount>/) ||
                     d.xmlContent.match(/<cbc:TaxInclusiveAmount[^>]*>([^<]+)<\/cbc:TaxInclusiveAmount>/);
-      if (match) return parseFloat(match[1]) || 0;
+      if (match) amt = parseFloat(match[1]) || 0;
+    } else {
+      const matchExp = expenses.find(e => e.invoiceNumber === d.id || e.id.includes(d.id));
+      if (matchExp) amt = matchExp.amount;
     }
-    const matchExp = expenses.find(e => e.invoiceNumber === d.id || e.id.includes(d.id));
-    if (matchExp) return matchExp.amount;
-    return 0;
+
+    if (d.documentType === 'nota_credito' || d.name?.toLowerCase().includes('crédito') || d.name?.toLowerCase().includes('credito')) {
+      return -Math.abs(amt);
+    }
+    return amt;
   };
 
   const renderReporte = () => {
-    const expensesByClient = repCompanyId
+    const activeRepCompanyId = selectedClientId
+      ? (myCompanies.find(c => c.ownerUserId === selectedClientId)?.id || repCompanyId)
+      : repCompanyId;
+
+    const expensesByClient = activeRepCompanyId
       ? expenses.filter(e => {
-          if (e.companyId !== repCompanyId || e.isPrivate) return false;
+          if (e.companyId !== activeRepCompanyId || e.isPrivate) return false;
+          if (['Facturación Electrónica', 'Ventas', 'Ingresos'].includes(e.category)) return false;
+          const matchingDoc = taxDocuments.find(d => d.id === e.invoiceNumber);
+          if (matchingDoc && matchingDoc.sunatStatus === 'INTERNO') return false;
           return e.date.startsWith(`${repYear}-${String(MONTHS.indexOf(repMonth) + 1).padStart(2, '0')}`);
         })
       : [];
 
-    const incomeDocs = repCompanyId
-      ? taxDocuments.filter(d => d.companyId === repCompanyId && d.sunatStatus !== 'INTERNO' &&
-          d.uploadDate?.startsWith(`${repYear}-${String(MONTHS.indexOf(repMonth) + 1).padStart(2, '0')}`))
+    const incomeDocs = activeRepCompanyId
+      ? taxDocuments.filter(d => d.companyId === activeRepCompanyId && d.sunatStatus !== 'INTERNO' &&
+          (d.uploadDate?.startsWith(`${repYear}-${String(MONTHS.indexOf(repMonth) + 1).padStart(2, '0')}`) ||
+           (d.periodYear === repYear && d.periodMonth.toLowerCase() === repMonth.toLowerCase())))
       : [];
 
     const totalGastos: number = expensesByClient.reduce<number>((s, e) => s + Number(e.amount), 0);
@@ -708,31 +1145,33 @@ export const AccountantDashboard: React.FC = () => {
       <div className="space-y-6">
         <h2 className="text-2xl font-black text-gray-800">Reporte Mensual</h2>
         <div className="flex flex-wrap gap-3 items-end">
-          <div>
-            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Empresa</label>
-            <select className="bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none min-w-[200px]"
-              value={repCompanyId} onChange={e => setRepCompanyId(e.target.value)}>
-              <option value="">Seleccionar empresa</option>
-              {myCompanies.map(c => <option key={c.id} value={c.id}>{c.name}{c.ruc ? ` (${c.ruc})` : ''}</option>)}
-            </select>
-          </div>
+          {!selectedClientId && (
+            <div>
+              <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Empresa</label>
+              <select className="bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none min-w-[200px]"
+                value={repCompanyId} onChange={e => setRepCompanyId(e.target.value)}>
+                <option value="">Seleccionar empresa</option>
+                {myCompanies.map(c => <option key={c.id} value={c.id}>{c.name}{c.ruc ? ` (${c.ruc})` : ''}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Mes</label>
             <select className="bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none"
-              value={repMonth} onChange={e => setRepMonth(e.target.value)}>
+              value={repMonth} onChange={e => { setRepMonth(e.target.value); setMovFilterMonth(e.target.value); }}>
               {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           </div>
           <div>
             <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Año</label>
             <select className="bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none"
-              value={repYear} onChange={e => setRepYear(Number(e.target.value))}>
+              value={repYear} onChange={e => { const y = Number(e.target.value); setRepYear(y); setMovFilterYear(y); }}>
               {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>
         </div>
 
-        {!repCompanyId ? (
+        {!activeRepCompanyId ? (
           <div className="py-20 text-center text-gray-400">
             <BarChart3 className="w-16 h-16 mx-auto mb-4 opacity-30" />
             <p className="font-black uppercase text-sm">Selecciona una empresa</p>
@@ -785,13 +1224,13 @@ export const AccountantDashboard: React.FC = () => {
             {/* Botones de exportación */}
             <div className="lg:col-span-2 flex gap-3">
               <button onClick={() => downloadPdfReport(
-                myCompanies.find(c => c.id === repCompanyId)?.name || '',
+                myCompanies.find(c => c.id === activeRepCompanyId)?.name || '',
                 repMonth, repYear, expensesByClient, totalGastos
               )}
                 className="flex-1 py-3 bg-brand-600 text-white rounded-xl font-black text-xs uppercase hover:bg-brand-700 transition flex items-center justify-center shadow-lg">
                 <Printer className="w-4 h-4 mr-2" /> Reporte PDF
               </button>
-              <button onClick={() => exportToExcel(myCompanies.find(c => c.id === repCompanyId)?.name || '', expensesByClient)}
+              <button onClick={() => exportToExcel(myCompanies.find(c => c.id === activeRepCompanyId)?.name || '', expensesByClient)}
                 className="flex-1 py-3 bg-green-600 text-white rounded-xl font-black text-xs uppercase hover:bg-green-700 transition flex items-center justify-center shadow-lg">
                 <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
               </button>
@@ -1010,12 +1449,6 @@ export const AccountantDashboard: React.FC = () => {
               <span className="text-sm font-black text-brand-800 uppercase">{targetCompany.name}</span>
             </div>
           )}
-          <div>
-            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Nombre del Documento</label>
-            <input type="text" placeholder="Ej: Factura F001-00000001" value={docName}
-              onChange={e => setDocName(e.target.value)}
-              className="w-full bg-white border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-brand-600" />
-          </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Mes</label>
@@ -1033,38 +1466,227 @@ export const AccountantDashboard: React.FC = () => {
             </div>
           </div>
           <div>
-            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Archivo (PDF, XML, imagen)</label>
-            <div onClick={() => docInputRef.current?.click()}
-              className="border-4 border-dashed border-gray-200 rounded-2xl p-10 text-center cursor-pointer hover:border-brand-400 transition">
-              {previewFile ? (
-                <div className="space-y-3">
-                  <img src={previewFile} className="max-h-40 mx-auto rounded-xl shadow-sm" alt="Preview" />
-                  <p className="text-xs text-gray-500 font-bold">Click para cambiar archivo</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <Upload className="w-12 h-12 text-gray-300 mx-auto" />
-                  <p className="text-sm font-black text-gray-500">Click para seleccionar archivo</p>
-                  <p className="text-[10px] text-gray-400">PDF, XML, JPG, PNG</p>
-                </div>
-              )}
-            </div>
-            <input type="file" ref={docInputRef} className="hidden"
-              accept=".pdf,.xml,.jpg,.jpeg,.png" onChange={handleFileSelect} />
+            <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">Archivos (PDF, XML, imagen)</label>
+            <FileUploadZone files={selectedFiles} onFilesChange={setSelectedFiles} />
           </div>
           <button onClick={() => {
             if (!targetCompanyId) return alert('Selecciona una empresa');
-            if (!docInputRef.current?.files?.length) return alert('Selecciona un archivo');
-            setIsUploadingDoc(true);
-            handleDocUpload({ target: { files: docInputRef.current.files } } as any);
+            if (!selectedFiles.length) return alert('Selecciona al menos un archivo');
+            handleDocUpload();
           }} disabled={!targetCompanyId || isUploadingDoc}
             className="w-full py-4 bg-brand-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-brand-700 transition flex items-center justify-center disabled:opacity-50 shadow-lg">
-            {isUploadingDoc ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Subiendo...</> : <><Upload className="w-4 h-4 mr-2" /> Subir Documento</>}
+            {isUploadingDoc ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Subiendo {uploadProgress.done} de {uploadProgress.total}...</> : <><Upload className="w-4 h-4 mr-2" /> Subir Documentos</>}
           </button>
         </div>
       </div>
     );
   };
+
+   // ─── View: Facturación del cliente (emisión por el contador) ───
+   const clientDocs = useMemo(() => {
+    if (!clientCompany) return [];
+    return taxDocuments
+      .filter(d => (d.userId === clientCompany.ownerUserId || d.accountantId === currentUser?.id) && d.companyId === clientCompany.id)
+      .sort((a, b) => new Date(b.uploadDate || '').getTime() - new Date(a.uploadDate || '').getTime());
+   }, [clientCompany, taxDocuments]);
+
+   const companyPendingInvoices = useMemo(() => {
+    if (!clientCompany) return [];
+    return pendingInvoices.filter(p => p.companyId === clientCompany.id && (p.status === 'PENDIENTE' || p.status === 'ENVIANDO' || p.status === 'RECHAZADO'));
+   }, [clientCompany, pendingInvoices]);
+
+    const formatDocType = (t?: string) => {
+     switch (t) {
+       case 'factura': return 'Factura';
+       case 'boleta': return 'Boleta';
+       case 'nota_credito': return 'Nota de Crédito';
+       case 'nota_debito': return 'Nota de Débito';
+       default: return t || 'Documento';
+     }
+    };
+
+    // ─── Paginación del histórico de comprobantes de la empresa (facturación) ───
+    const DOC_PAGE_SIZE = 10;
+    const [docPage, setDocPage] = useState(1);
+    const docPageCount = useMemo(() => Math.max(1, Math.ceil(clientDocs.length / DOC_PAGE_SIZE)), [clientDocs]);
+    const paginatedDocs = useMemo(() => {
+      const start = (docPage - 1) * DOC_PAGE_SIZE;
+      return clientDocs.slice(start, start + DOC_PAGE_SIZE);
+    }, [clientDocs, docPage]);
+    useEffect(() => { setDocPage(1); }, [clientCompany?.id]);
+
+    const renderFacturacion = () => {
+    if (!clientCompany) return null;
+    const hasCredentials = !!(clientCompany.ruc && clientCompany.solUser && clientCompany.certBase64 && clientCompany.certPass);
+    const canEmit = !!currentUser;
+
+      return (
+       <div className="space-y-6">
+          <div className="flex flex-wrap gap-3 items-center justify-between">
+            <h3 className="text-lg font-black text-gray-800 uppercase">Emisión de Comprobantes</h3>
+            {!hasCredentials && (
+             <span className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded-full text-[10px] font-black uppercase">Sin credenciales SUNAT — solo interno</span>
+            )}
+          </div>
+
+          {isAtCreatedAcctDocLimit && isCreatedAccountantOfClient && (
+            <p className="text-sm text-amber-600 font-medium">
+              Has alcanzado el límite de comprobantes por contador creado ({clientCreatedAcctDocLimit}) de tu plan del cliente
+            </p>
+          )}
+
+           {canEmit && (
+           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+             {!!(clientCompany?.isPersonaNatural || clientUser?.role === UserRole.PERSONA_NATURAL) && (
+               <button onClick={() => {
+                 if (isAtClientTaxDocLimit) { alert(`Tu cliente ha alcanzado el límite de comprobantes (${clientTaxDocLimit}) de su plan.`); return; }
+                 if (isAtAccountantTaxDocLimit) { alert(`Has alcanzado tu límite de comprobantes (${accountantTaxDocLimit}) de tu plan.`); return; }
+                 if (isAtCreatedAcctDocLimit) { alert(`Tu cliente ha alcanzado el límite de comprobantes por contador creado (${clientCreatedAcctDocLimit}) de su plan.`); return; }
+                 setShowInvoiceModal({ type: 'factura' }); // Or RH modal
+               }}
+                 className="py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-wider hover:bg-blue-700 transition shadow-lg flex items-center justify-center gap-2">
+                 <ReceiptText className="w-4 h-4 text-white" /> RECIBO RH
+               </button>
+             )}
+             <button onClick={() => { if (isAtClientTaxDocLimit) { alert(`Tu cliente ha alcanzado el límite de comprobantes (${clientTaxDocLimit}) de su plan.`); return; }
+
+    if (isAtAccountantTaxDocLimit) {
+      alert(`Has alcanzado tu límite de comprobantes (${accountantTaxDocLimit}) de tu plan.`);
+      return;
+    }
+    if (isAtCreatedAcctDocLimit) {
+      alert(`Tu cliente ha alcanzado el límite de comprobantes por contador creado (${clientCreatedAcctDocLimit}) de su plan.`);
+      return;
+    } setShowInvoiceModal({ type: 'factura' }); }}
+               className="py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-wider hover:bg-slate-800 transition shadow-lg flex items-center justify-center gap-2">
+               <FileInput className="w-4 h-4 text-amber-400" /> FACTURA
+             </button>
+             <button onClick={() => { if (isAtClientTaxDocLimit) { alert(`Tu cliente ha alcanzado el límite de comprobantes (${clientTaxDocLimit}) de su plan.`); return; }
+
+    if (isAtAccountantTaxDocLimit) {
+      alert(`Has alcanzado tu límite de comprobantes (${accountantTaxDocLimit}) de tu plan.`);
+      return;
+    }
+    if (isAtCreatedAcctDocLimit) {
+      alert(`Tu cliente ha alcanzado el límite de comprobantes por contador creado (${clientCreatedAcctDocLimit}) de su plan.`);
+      return;
+    } setShowInvoiceModal({ type: 'boleta' }); }}
+               className="py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-wider hover:bg-slate-800 transition shadow-lg flex items-center justify-center gap-2">
+               <FileInput className="w-4 h-4 text-amber-400" /> BOLETA
+             </button>
+             <button onClick={() => { if (isAtClientTaxDocLimit) { alert(`Tu cliente ha alcanzado el límite de comprobantes (${clientTaxDocLimit}) de su plan.`); return; }
+
+    if (isAtAccountantTaxDocLimit) {
+      alert(`Has alcanzado tu límite de comprobantes (${accountantTaxDocLimit}) de tu plan.`);
+      return;
+    }
+    if (isAtCreatedAcctDocLimit) {
+      alert(`Tu cliente ha alcanzado el límite de comprobantes por contador creado (${clientCreatedAcctDocLimit}) de su plan.`);
+      return;
+    } setShowNcModal(true); }}
+               disabled={!hasCredentials}
+               title={hasCredentials ? '' : 'Necesita credenciales SUNAT de la empresa'}
+               className="py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-wider hover:bg-slate-800 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+               <FileInput className="w-4 h-4 text-amber-400" /> NC
+             </button>
+             <button onClick={() => { if (isAtClientTaxDocLimit) { alert(`Tu cliente ha alcanzado el límite de comprobantes (${clientTaxDocLimit}) de su plan.`); return; }
+
+    if (isAtAccountantTaxDocLimit) {
+      alert(`Has alcanzado tu límite de comprobantes (${accountantTaxDocLimit}) de tu plan.`);
+      return;
+    }
+    if (isAtCreatedAcctDocLimit) {
+      alert(`Tu cliente ha alcanzado el límite de comprobantes por contador creado (${clientCreatedAcctDocLimit}) de su plan.`);
+      return;
+    } setShowNdModal(true); }}
+               disabled={!hasCredentials}
+               title={hasCredentials ? '' : 'Necesita credenciales SUNAT de la empresa'}
+               className="py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-wider hover:bg-slate-800 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+               <FileInput className="w-4 h-4 text-amber-400" /> ND
+             </button>
+           </div>
+          )}
+
+         {/* Pendientes de SUNAT */}
+         {companyPendingInvoices.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-black text-xs uppercase text-red-600 flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Pendientes / Fallidos</h4>
+              <button onClick={retryAllPending}
+                className="px-3 py-1.5 bg-amber-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-amber-700 transition flex items-center gap-1">
+                <RefreshCw className="w-3 h-3" /> Reintentar Todo
+              </button>
+            </div>
+            <div className="space-y-2">
+              {companyPendingInvoices.map(inv => (
+                <div key={inv.id} className="p-3 bg-gray-50 rounded-xl flex justify-between items-center">
+                  <div>
+                    <p className="font-black text-sm text-gray-800 uppercase">{inv.documentType === 'factura' ? 'FACTURA' : inv.documentType === 'boleta' ? 'BOLETA' : inv.documentType}</p>
+                    <p className="text-xs text-gray-500 font-bold">{formatDocType(inv.documentType)} {inv.serie}-{typeof inv.correlative === 'number' ? String(inv.correlative).padStart(8, '0') : ''}</p>
+                    {inv.lastError && <p className="text-[10px] text-red-600 truncate max-w-md">{inv.lastError}</p>}
+                  </div>
+                  <button onClick={() => retryPendingInvoice(inv)} disabled={retryingInvoice === inv.id || (inv.attemptCount || 0) >= getMaxRetryAttempts()}
+                    className="px-3 py-1.5 bg-brand-700 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-800 disabled:opacity-50 transition flex items-center gap-1">
+                    {retryingInvoice === inv.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} Reintentar
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+         )}
+
+         {/* Histórico de comprobantes de la empresa */}
+         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+           <div className="p-4 border-b flex justify-between items-center">
+             <h4 className="font-black text-xs uppercase text-gray-500">Comprobantes de {clientCompany.name}</h4>
+           </div>
+           {clientDocs.length === 0 ? (
+            <div className="py-16 text-center text-gray-400 italic">No hay comprobantes aún.</div>
+           ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200">
+                    <th className="px-4 py-2 text-[10px] font-black uppercase text-gray-500">Documento</th>
+                    <th className="px-4 py-2 text-[10px] font-black uppercase text-gray-500">Tipo</th>
+                    <th className="px-4 py-2 text-[10px] font-black uppercase text-gray-500">Estado</th>
+                    <th className="px-4 py-2 text-[10px] font-black uppercase text-gray-500">Monto</th>
+                    <th className="px-4 py-2 text-[10px] font-black uppercase text-gray-500">Fecha</th>
+                  </tr>
+                </thead>
+                 <tbody className="divide-y divide-gray-200">
+                   {paginatedDocs.map(doc => (
+                     <tr key={doc.id} onClick={() => setPreviewDoc(doc)} className="hover:bg-brand-50 cursor-pointer transition group">
+                      <td className="px-4 py-2"><span className="font-black text-gray-800 text-xs uppercase">{doc.name}</span></td>
+                      <td className="px-4 py-2 text-[11px] text-gray-500 font-bold">{formatDocType(doc.documentType)}</td>
+                      <td className="px-4 py-2">
+                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                          doc.sunatStatus === 'SENT' || doc.sunatStatus === 'ACEPTADO' ? 'bg-green-100 text-green-700' : doc.sunatStatus === 'REJECTED' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                        }`}>{doc.sunatStatus === 'SENT' || doc.sunatStatus === 'ACEPTADO' ? 'Aceptado' : doc.sunatStatus === 'REJECTED' ? 'Rechazado' : 'Pendiente'}</span>
+                      </td>
+                      <td className="px-4 py-2 text-[11px] font-black text-gray-700">{doc.metadata?.amount ? `S/ ${doc.metadata.amount.toFixed(2)}` : '—'}</td>
+                      <td className="px-4 py-2 text-[11px] text-gray-500 font-mono">{doc.uploadDate}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            )}
+            {clientDocs.length > 1 && (
+             <div className="p-4 border-t border-gray-200 flex items-center justify-between">
+               <span className="text-[11px] text-gray-500">Página {docPage} de {docPageCount} · {clientDocs.length} comprobantes</span>
+               <div className="flex items-center gap-1">
+                 <button type="button" onClick={() => setDocPage(p => Math.max(1, p - 1))} disabled={docPage === 1}
+                   className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-xl text-[10px] font-black uppercase hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition">Anterior</button>
+                 <button type="button" onClick={() => setDocPage(p => Math.min(docPageCount, p + 1))} disabled={docPage === docPageCount}
+                   className="px-3 py-1.5 bg-brand-700 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-800 disabled:opacity-40 disabled:cursor-not-allowed transition">Siguiente</button>
+               </div>
+             </div>
+            )}
+          </div>
+      </div>
+    );
+   };
 
   // ─── Modal: Detalle de Gasto ───
   const renderExpenseModal = () => {
@@ -1153,10 +1775,6 @@ export const AccountantDashboard: React.FC = () => {
                   className="w-full bg-gray-50 border-2 border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-brand-600 uppercase" placeholder="Av. Principal 123" />
               </div>
             </div>
-            <div>
-              <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block">Contraseña Generada</label>
-              <input type="password" readOnly value={generatedPassword} className="w-full bg-gray-50 border-2 border-gray-200 p-3 rounded-xl text-sm font-mono text-gray-500 cursor-not-allowed outline-none" placeholder="Se generará automáticamente" />
-            </div>
             <button type="submit" className="w-full py-4 bg-brand-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-brand-700 transition shadow-lg">
               <UserPlus className="w-4 h-4 mr-2 inline" /> Crear Cliente
             </button>
@@ -1168,17 +1786,106 @@ export const AccountantDashboard: React.FC = () => {
 
   // ─── Render principal según activeTab ───
   const renderContent = () => {
-    switch (activeTab) {
-      case 'reporte': return renderReporte();
-      case 'subir': return renderSubirArchivo();
-      default: return selectedClientId ? renderMovimientos() : renderClientes();
-    }
+    if (selectedClientId) return renderClientDetail();
+    return renderClientes();
+  };
+
+  const clientSubTabs = [
+    { key: 'movimientos' as const, label: 'Movimientos', icon: ReceiptText },
+    { key: 'reporte' as const, label: 'Reporte Mensual', icon: BarChart3 },
+    { key: 'subir' as const, label: 'Subir Archivo', icon: Upload },
+    { key: 'facturacion' as const, label: 'Facturación', icon: FileText },
+  ];
+
+  // ─── View: Detalle de Cliente (con sub-tabs internos) ───
+  const renderClientDetail = () => {
+    const client = users.find(u => u.id === selectedClientId);
+    if (!client) return <div className="py-10 text-center text-gray-400">Cliente no encontrado</div>;
+    const clientCompany = myCompanies.find(c => c.ownerUserId === client.id);
+
+    return (
+      <div className="space-y-6 animate-fade-in">
+        {/* Cabecera del cliente con botón volver */}
+        <div className="flex items-center space-x-4">
+          <button onClick={() => { setSelectedClientId(null); setClientView('movimientos'); }} className="p-2 hover:bg-gray-100 rounded-full transition">
+            <ArrowLeft className="w-6 h-6" />
+          </button>
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">{client.name}</h2>
+            <p className="text-gray-500 text-sm">RUC: <span className="font-mono">{clientCompany?.ruc || 'No registrado'}</span> | {clientCompany?.businessName || 'Persona Natural'}</p>
+          </div>
+        </div>
+
+        {/* Sub-tabs internos del cliente */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-1 flex gap-1 overflow-x-auto">
+          {clientSubTabs.map(tab => {
+            const Icon = tab.icon;
+            const isActive = clientView === tab.key;
+            return (
+              <button key={tab.key} onClick={() => setClientView(tab.key)}
+                className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                  isActive ? 'bg-brand-700 text-white shadow-md' : 'text-gray-400 hover:bg-gray-50'
+                }`}>
+                <Icon className="w-4 h-4" /> {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {clientView === 'movimientos' && renderMovimientos()}
+        {clientView === 'reporte' && renderReporte()}
+        {clientView === 'subir' && renderSubirArchivo()}
+        {clientView === 'facturacion' && renderFacturacion()}
+
+        {/* Wizards de emisión (factura/boleta + notas) */}
+        {clientCompany && showInvoiceModal && (
+          <InvoiceWizard
+            key={showInvoiceModal.type}
+            isOpen={true}
+            onClose={() => setShowInvoiceModal(null)}
+            initialType={showInvoiceModal.type}
+            company={clientCompany}
+            accountantId={currentUser?.id}
+            defaultSendToSunat={true}
+            onEmitted={handleAccountantInvoiceEmitted}
+          />
+        )}
+        {clientCompany && showNcModal && (
+          <NoteWizard
+            isOpen={true}
+            onClose={() => setShowNcModal(false)}
+            initialType="nota_credito"
+            company={clientCompany}
+            accountantId={currentUser?.id}
+            onEmitted={(doc) => handleAccountantInvoiceEmitted({
+              id: doc.id, name: doc.name, sunatStatus: doc.sunatStatus || '',
+              xmlContent: doc.xmlContent, cdrBase64: doc.cdrBase64,
+              amount: doc.metadata?.amount, customerName: doc.metadata?.recipientName, customerRuc: doc.metadata?.recipientRuc,
+              documentType: doc.documentType, originalDocumentId: doc.originalDocumentId
+            })}
+          />
+        )}
+        {clientCompany && showNdModal && (
+          <NoteWizard
+            isOpen={true}
+            onClose={() => setShowNdModal(false)}
+            initialType="nota_debito"
+            company={clientCompany}
+            accountantId={currentUser?.id}
+            onEmitted={(doc) => handleAccountantInvoiceEmitted({
+              id: doc.id, name: doc.name, sunatStatus: doc.sunatStatus || '',
+              xmlContent: doc.xmlContent, cdrBase64: doc.cdrBase64,
+              amount: doc.metadata?.amount, customerName: doc.metadata?.recipientName, customerRuc: doc.metadata?.recipientRuc,
+              documentType: doc.documentType, originalDocumentId: doc.originalDocumentId
+            })}
+          />
+        )}
+      </div>
+    );
   };
 
   const tabs = [
     { key: 'clientes' as const, label: 'Clientes', icon: Users },
-    { key: 'reporte' as const, label: 'Reporte Mensual', icon: BarChart3 },
-    { key: 'subir' as const, label: 'Subir Archivo', icon: Upload },
   ];
 
   return (
@@ -1205,6 +1912,8 @@ export const AccountantDashboard: React.FC = () => {
                     <>Activa hasta el {currentUser.subscriptionEndDate ? new Date(currentUser.subscriptionEndDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</>
                   ) : hasInherited ? (
                     <><span className="text-blue-600">Activa</span> <span className="text-[10px] text-gray-400">(vía cliente: {owner?.name})</span></>
+                  ) : currentUser.parentId ? (
+                    <span className="text-blue-600">Asignada por tu cliente</span>
                   ) : currentUser.subscriptionStatus === SubscriptionStatus.EXPIRED ? (
                     <span className="text-red-600">Vencida</span>
                   ) : (
@@ -1214,9 +1923,11 @@ export const AccountantDashboard: React.FC = () => {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <button onClick={() => setShowPayment(true)} className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition shadow-sm flex items-center gap-2">
-                <Sparkles className="w-4 h-4" /> {hasOwnSubscription ? 'Renovar' : 'Comprar Plan'}
-              </button>
+              {!currentUser.parentId && (
+                <button onClick={() => setShowPayment(true)} className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-brand-700 transition shadow-sm flex items-center gap-2">
+                  <Sparkles className="w-4 h-4" /> {hasOwnSubscription ? 'Renovar' : 'Comprar Plan'}
+                </button>
+              )}
             </div>
           </div>
         );
@@ -1226,11 +1937,9 @@ export const AccountantDashboard: React.FC = () => {
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-1 flex gap-1 overflow-x-auto">
         {tabs.map(tab => {
           const Icon = tab.icon;
-          const isActive = (tab.key === 'clientes' && activeTab === 'clientes' && !selectedClientId) ||
-            (tab.key === 'clientes' && activeTab === 'clientes' && selectedClientId) ||
-            (tab.key === activeTab);
+          const isActive = !selectedClientId;
           return (
-            <button key={tab.key} onClick={() => { setActiveTab(tab.key); if (tab.key !== 'clientes') setSelectedClientId(null); }}
+            <button key={tab.key} onClick={() => { setSelectedClientId(null); setClientView('movimientos'); }}
               className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all whitespace-nowrap ${
                 isActive ? 'bg-brand-700 text-white shadow-md' : 'text-gray-400 hover:bg-gray-50'
               }`}>
@@ -1282,7 +1991,7 @@ export const AccountantDashboard: React.FC = () => {
         </div>
       )}
 
-      {showPayment && (
+      {showPayment && !currentUser.parentId && (
         <div className="fixed inset-0 z-[120] bg-white overflow-y-auto">
           <div className="sticky top-0 z-10 bg-white border-b p-4 flex justify-between items-center shadow-sm">
             <h2 className="font-black text-sm uppercase tracking-widest text-gray-800">Planes de Suscripción</h2>
@@ -1293,6 +2002,20 @@ export const AccountantDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* MODAL ÁRBOL DE DOCUMENTOS PARA EL CONTADOR */}
+      <FileTreeModal
+        isOpen={showFileTreeModal}
+        onClose={() => setShowFileTreeModal(false)}
+        documents={selectedClientId ? taxDocuments.filter(d => (d.userId === selectedClientId || (d.companyId && myCompanies.some(c => c.id === d.companyId && c.ownerUserId === selectedClientId))) && d.sunatStatus !== 'BORRADO') : taxDocuments.filter(d => d.sunatStatus !== 'BORRADO')}
+        onAddDocument={(doc) => addTaxDocument(doc)}
+        onPreviewDocument={(doc) => setPreviewDoc(doc)}
+        companyId={selectedClientId ? (myCompanies.find(c => c.ownerUserId === selectedClientId)?.id || '') : ''}
+        userId={selectedClientId || currentUser?.id || ''}
+        accountantId={currentUser?.id || ''}
+        allowDelete={false}
+        userRole={currentUser?.role}
+      />
     </div>
   );
 };

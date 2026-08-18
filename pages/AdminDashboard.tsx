@@ -1,13 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
 import { UserRole, SubscriptionStatus, User, SubscriptionRecord, Company } from '../types';
 // Fixed: Aliased User as UserIcon from lucide-react to avoid name collision with User type
-import { User as UserIcon, Users, Trash2, Edit2, Shield, CreditCard, Save, History, X, PlusCircle, UserPlus, Check, Bell, Info, QrCode, Upload, Building, MapPin, Hash, Settings, Package, DollarSign, Smartphone, Globe, ExternalLink, Book, CheckCircle2, Loader2, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { User as UserIcon, Users, Trash2, Edit2, Shield, CreditCard, Save, History, X, PlusCircle, UserPlus, Check, Bell, Info, QrCode, Upload, Building, MapPin, Hash, Settings, Package, Smartphone, Globe, ExternalLink, Book, CheckCircle2, Loader2, ChevronLeft, ChevronRight, Search, KeyRound } from 'lucide-react';
 import { fileToBase64 } from '../services/geminiService';
 import { consultaService } from '../services/consultaService';
+import { formatImageUrl } from '../utils/imageUtils';
 
 export const AdminDashboard: React.FC = () => {
   const { 
+    currentUser,
     users, 
     companies,
     registerUser, 
@@ -20,6 +22,8 @@ export const AdminDashboard: React.FC = () => {
     accountantPackages,
     updatePackage,
     updateAccountantPackage,
+    createPackage,
+    deletePackage,
     paymentMethods, 
     updatePaymentMethod, 
     subscriptionHistory, 
@@ -32,26 +36,56 @@ export const AdminDashboard: React.FC = () => {
     updateSunatGlobalConfig,
     complaints,
     updateComplaintStatus,
-    generatePassword
+    generatePassword,
+    resetUserPassword
   } = useStore();
 
 
   const [activeTab, setActiveTab] = useState<'users' | 'subscriptions' | 'settings' | 'complaints' | 'companies'>('users');
   const [subFilter, setSubFilter] = useState<'all' | SubscriptionStatus>('all');
+  const [userSearchQuery, setUserSearchQuery] = useState('');
   const [showNotifications, setShowNotifications] = useState(false);
   const [previewVoucherRec, setPreviewVoucherRec] = useState<SubscriptionRecord | null>(null);
+
+  // --- FILTERED USERS SEARCH & SUBFILTER ---
+  const filteredUsers = useMemo(() => {
+    return users.filter(u => {
+      const matchesSub = subFilter === 'all' || u.subscriptionStatus === subFilter;
+      const q = userSearchQuery.trim().toLowerCase();
+      const matchesSearch = !q || (
+        (u.name && u.name.toLowerCase().includes(q)) ||
+        (u.email && u.email.toLowerCase().includes(q)) ||
+        (u.role && u.role.toLowerCase().includes(q)) ||
+        (u.ruc && u.ruc.toLowerCase().includes(q)) ||
+        (u.solUser && u.solUser.toLowerCase().includes(q))
+      );
+      return matchesSub && matchesSearch;
+    });
+  }, [users, subFilter, userSearchQuery]);
 
   // --- PAGINATION STATES FOR USERS & PAYMENTS TABLE ---
   const [usersPage, setUsersPage] = useState(1);
   const [usersPerPage, setUsersPerPage] = useState(10);
   const [paymentsPage, setPaymentsPage] = useState(1);
   const [paymentsPerPage, setPaymentsPerPage] = useState(10);
+  const [companiesPage, setCompaniesPage] = useState(1);
+  const [companiesPerPage, setCompaniesPerPage] = useState(10);
+  const [complaintsPage, setComplaintsPage] = useState(1);
+  const [complaintsPerPage, setComplaintsPerPage] = useState(10);
 
   // --- SETTINGS STATES ---
   const [editingPackageId, setEditingPackageId] = useState<string | null>(null);
-  const [tempPrice, setTempPrice] = useState<string>('');
-  const [editingAccountantPackageId, setEditingAccountantPackageId] = useState<string | null>(null);
-  const [tempAccountantPrice, setTempAccountantPrice] = useState<string>('');
+  const [showPackageForm, setShowPackageForm] = useState(false);
+  const [isCreatingPackage, setIsCreatingPackage] = useState(false);
+  const [formPackageType, setFormPackageType] = useState<'CLIENT' | 'ACCOUNTANT'>('CLIENT');
+  const [formPackageData, setFormPackageData] = useState({
+    id: '',
+    name: '',
+    price: '',
+    durationMonths: '1',
+    features: [''] as string[],
+    limits: {} as Record<string, Record<string, number>>,
+  });
   
   const [editingMethodId, setEditingMethodId] = useState<string | null>(null);
   const [tempDetails, setTempDetails] = useState<string>('');
@@ -80,7 +114,7 @@ export const AdminDashboard: React.FC = () => {
     solUser: '',
     solPass: '',
   });
-  const [generatedPassword, setGeneratedPassword] = useState('');
+  const [passwordResetUser, setPasswordResetUser] = useState<User | null>(null);
 
   // --- COMPANY MANAGEMENT STATES ---
   const [showCompanyModal, setShowCompanyModal] = useState(false);
@@ -101,6 +135,21 @@ export const AdminDashboard: React.FC = () => {
     sunatEnv: 'SANDBOX' as 'SANDBOX' | 'PRODUCTION',
   });
   const certFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [configForm, setConfigForm] = useState({
+    sunatToken: sunatGlobalConfig.sunatToken || '',
+    sunatApiUrl: sunatGlobalConfig.sunatApiUrl || 'https://sandbox.apisunat.pe/api/v3',
+    supportPhone: sunatGlobalConfig.supportPhone || '999888777'
+  });
+  const [isConfigSaved, setIsConfigSaved] = useState(false);
+
+  useEffect(() => {
+    setConfigForm({
+      sunatToken: sunatGlobalConfig.sunatToken || '',
+      sunatApiUrl: sunatGlobalConfig.sunatApiUrl || 'https://sandbox.apisunat.pe/api/v3',
+      supportPhone: sunatGlobalConfig.supportPhone || '999888777'
+    });
+  }, [sunatGlobalConfig.sunatToken, sunatGlobalConfig.sunatApiUrl, sunatGlobalConfig.supportPhone]);
 
   const handleOpenCreateCompany = () => {
     setEditingCompany(null);
@@ -147,23 +196,186 @@ export const AdminDashboard: React.FC = () => {
   };
 
   const handleEditPackage = (pkg: any) => {
+    const type = pkg.type || 'CLIENT';
     setEditingPackageId(pkg.id);
-    setTempPrice(pkg.price.toString());
+    setFormPackageData({
+      id: pkg.id,
+      name: pkg.name,
+      price: pkg.price.toString(),
+      durationMonths: pkg.durationMonths.toString(),
+      features: pkg.features || [''],
+      limits: mergeLimits(pkg.limits || {}, type),
+    });
+    setFormPackageType(type);
+    setIsCreatingPackage(false);
+    setShowPackageForm(true);
   };
 
-  const savePackage = (id: string) => {
-    updatePackage(id, { price: parseFloat(tempPrice) });
+  const handleSavePackage = () => {
+    const relevantRole = formPackageType === 'ACCOUNTANT' ? 'ACCOUNTANT' : 'USER';
+    const isClientPlan = formPackageType === 'CLIENT';
+    const cleanedLimits: Record<string, Record<string, number>> = {};
+    for (const [limitKey, roleValues] of Object.entries(formPackageData.limits)) {
+      if (roleValues[relevantRole] !== undefined) {
+        const roles: Record<string, number> = { [relevantRole]: roleValues[relevantRole] };
+        if (isClientPlan) {
+          roles['PERSONA_NATURAL'] = roleValues[relevantRole];
+        }
+        cleanedLimits[limitKey] = roles;
+      }
+    }
+    const isFree = formPackageData.id?.includes('free') || editingPackageId?.includes('free');
+    const pkg = {
+      id: formPackageData.id || `pkg-${Date.now()}`,
+      name: formPackageData.name,
+      price: parseFloat(formPackageData.price) || 0,
+      durationMonths: parseInt(formPackageData.durationMonths) || 1,
+      features: formPackageData.features.filter((f: string) => f.trim() !== ''),
+      limits: Object.keys(cleanedLimits).length > 0 ? cleanedLimits : null,
+      type: formPackageType,
+      isFree: isFree ? true : undefined,
+    };
+    if (editingPackageId) {
+      if (formPackageType === 'ACCOUNTANT') {
+        updateAccountantPackage(editingPackageId, pkg);
+      } else {
+        updatePackage(editingPackageId, pkg);
+      }
+    } else {
+      createPackage(pkg);
+    }
+    setShowPackageForm(false);
     setEditingPackageId(null);
+    setFormPackageData({ id: '', name: '', price: '', durationMonths: '1', features: [''], limits: {} });
   };
 
-  const handleEditAccountantPackage = (pkg: any) => {
-    setEditingAccountantPackageId(pkg.id);
-    setTempAccountantPrice(pkg.price.toString());
+  const handleDeletePackage = (id: string) => {
+    const target = [...packages, ...accountantPackages].find(p => p.id === id);
+    if (target && (target.isFree || target.id.includes('free'))) {
+      alert('El Plan Gratis es un plan por defecto del sistema y no se puede eliminar.');
+      return;
+    }
+    if (!confirm('¿Eliminar este plan? Se eliminará permanentemente.')) return;
+    deletePackage(id);
   };
 
-  const saveAccountantPackage = (id: string) => {
-    updateAccountantPackage(id, { price: parseFloat(tempAccountantPrice) });
-    setEditingAccountantPackageId(null);
+  const handleAddFeature = () => {
+    setFormPackageData(prev => ({ ...prev, features: [...prev.features, ''] }));
+  };
+
+  const handleRemoveFeature = (idx: number) => {
+    setFormPackageData(prev => ({
+      ...prev,
+      features: prev.features.filter((_, i) => i !== idx),
+    }));
+  };
+
+  const handleFeatureChange = (idx: number, value: string) => {
+    setFormPackageData(prev => ({
+      ...prev,
+      features: prev.features.map((f, i) => i === idx ? value : f),
+    }));
+  };
+
+  const getDefaultLimits = (type: 'CLIENT' | 'ACCOUNTANT') => {
+    if (type === 'ACCOUNTANT') {
+      return {
+        maxManagedCompanies: {},
+        maxTaxDocuments: {},
+        maxCreatedClients: {},
+        maxCompaniesPerCreatedClient: {},
+        maxTaxDocumentsPerCreatedClient: {},
+        maxSubUsersPerCreatedClient: {},
+        maxCreatedAccountantsPerCreatedClient: {},
+        maxAccountantsPerCreatedClient: {},
+      };
+    }
+    return {
+      maxCompanies: {},
+      maxTaxDocuments: {},
+      maxSubUsers: {},
+      maxAccountants: {},
+      maxCreatedAccountants: {},
+      maxManagedCompaniesPerAccountant: {},
+      maxTaxDocumentsPerAccountant: {},
+    };
+  };
+
+  const mergeLimits = (existing: Record<string, Record<string, number>> | undefined, type: 'CLIENT' | 'ACCOUNTANT') => {
+    const defaults = getDefaultLimits(type);
+    const merged: Record<string, Record<string, number>> = {};
+    for (const key of Object.keys(defaults)) {
+      merged[key] = existing && existing[key] ? { ...existing[key] } : {};
+    }
+    if (existing) {
+      for (const key of Object.keys(existing)) {
+        if (!(key in merged)) {
+          merged[key] = { ...existing[key] };
+        }
+      }
+    }
+    return merged;
+  };
+
+  const handleOpenCreatePackage = (type: 'CLIENT' | 'ACCOUNTANT') => {
+    setIsCreatingPackage(true);
+    setEditingPackageId(null);
+    setFormPackageType(type);
+    const initialLimit = getDefaultLimits(type);
+    setFormPackageData({ id: '', name: '', price: '', durationMonths: '1', features: [''], limits: initialLimit });
+    setShowPackageForm(true);
+  };
+
+  const handleAddLimitType = () => {
+    const availableTypes = formPackageType === 'ACCOUNTANT' ? ['maxManagedCompanies', 'maxTaxDocuments', 'maxCreatedClients', 'maxCompaniesPerCreatedClient', 'maxTaxDocumentsPerCreatedClient', 'maxSubUsersPerCreatedClient', 'maxCreatedAccountantsPerCreatedClient', 'maxAccountantsPerCreatedClient'] : ['maxCompanies', 'maxTaxDocuments', 'maxSubUsers', 'maxAccountants', 'maxCreatedAccountants', 'maxManagedCompaniesPerAccountant', 'maxTaxDocumentsPerAccountant'];
+    const existingTypes = Object.keys(formPackageData.limits);
+    const nextType = availableTypes.find(t => !existingTypes.includes(t));
+    if (nextType) {
+      setFormPackageData(prev => ({ ...prev, limits: { ...prev.limits, [nextType]: {} } }));
+    }
+  };
+
+  const getLimitTypeLabel = (limitKey: string) => {
+    if (limitKey === 'maxCompanies') return 'Cantidad de empresas';
+    if (limitKey === 'maxManagedCompanies') return 'Empresas a gestionar';
+    if (limitKey === 'maxTaxDocuments') return 'Cantidad de comprobantes';
+    if (limitKey === 'maxSubUsers') return 'Cantidad de sub usuarios';
+    if (limitKey === 'maxAccountants') return 'Cantidad de contadores';
+    if (limitKey === 'maxCreatedAccountants') return 'Cantidad de contadores a crear';
+    if (limitKey === 'maxCreatedClients') return 'Cantidad de clientes a crear';
+    if (limitKey === 'maxManagedCompaniesPerAccountant') return 'Cantidad de empresas gestionadas por contador';
+    if (limitKey === 'maxTaxDocumentsPerAccountant') return 'Comprobantes por contador creado';
+    if (limitKey === 'maxCompaniesPerCreatedClient') return 'Cantidad de empresas por cliente creado';
+    if (limitKey === 'maxTaxDocumentsPerCreatedClient') return 'Cantidad de comprobantes por cliente creado';
+    if (limitKey === 'maxSubUsersPerCreatedClient') return 'Cantidad de sub usuarios por cliente creado';
+    if (limitKey === 'maxCreatedAccountantsPerCreatedClient') return 'Cantidad de contadores creados al cliente creado';
+    if (limitKey === 'maxAccountantsPerCreatedClient') return 'Cantidad de contadores con los que trabaja el cliente creado';
+    return limitKey;
+  };
+
+  const isLimitTypeAvailable = () => {
+    const availableTypes = formPackageType === 'ACCOUNTANT' ? ['maxManagedCompanies', 'maxTaxDocuments', 'maxCreatedClients', 'maxCompaniesPerCreatedClient', 'maxTaxDocumentsPerCreatedClient', 'maxSubUsersPerCreatedClient', 'maxCreatedAccountantsPerCreatedClient', 'maxAccountantsPerCreatedClient'] : ['maxCompanies', 'maxTaxDocuments', 'maxSubUsers', 'maxAccountants', 'maxCreatedAccountants', 'maxManagedCompaniesPerAccountant', 'maxTaxDocumentsPerAccountant'];
+    return availableTypes.some(t => !Object.keys(formPackageData.limits).includes(t));
+  };
+
+  const handleRemoveLimitType = (limitKey: string) => {
+    const newLimits = { ...formPackageData.limits };
+    delete newLimits[limitKey];
+    setFormPackageData(prev => ({ ...prev, limits: newLimits }));
+  };
+
+  const handleLimitValueChange = (limitKey: string, role: string, value: string) => {
+    setFormPackageData(prev => ({
+      ...prev,
+      limits: {
+        ...prev.limits,
+        [limitKey]: {
+          ...prev.limits[limitKey],
+          [role]: value === '' ? undefined : parseInt(value),
+        },
+
+      },
+    }));
   };
 
   const handleSearchCompanyRuc = async () => {
@@ -233,10 +445,8 @@ export const AdminDashboard: React.FC = () => {
 
   const handleOpenCreateUser = () => {
     setEditingUser(null);
-    const pwd = generatePassword();
-    setGeneratedPassword(pwd);
     setUserFormData({
-      name: '', email: '', role: UserRole.USER, subscriptionStatus: SubscriptionStatus.PENDING,
+      name: '', email: '', role: UserRole.PERSONA_NATURAL, subscriptionStatus: SubscriptionStatus.PENDING,
       ruc: '', solUser: '', solPass: '',
     });
     setShowUserModal(true);
@@ -244,7 +454,6 @@ export const AdminDashboard: React.FC = () => {
 
   const handleOpenEditUser = (user: User) => {
     setEditingUser(user);
-    setGeneratedPassword('');
     setUserFormData({
       name: user.name, email: user.email, role: user.role,
       subscriptionStatus: user.subscriptionStatus || SubscriptionStatus.PENDING,
@@ -259,7 +468,7 @@ export const AdminDashboard: React.FC = () => {
       if (editingUser) {
         await updateUser(editingUser.id, userFormData);
       } else {
-        const pwd = generatedPassword || generatePassword();
+        const pwd = generatePassword();
         const newUser = {
           id: Date.now().toString(),
           ...userFormData,
@@ -279,7 +488,16 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const accountants = users.filter(u => u.role === UserRole.ACCOUNTANT);
+  const handleResetPassword = async (user: User) => {
+    if (!window.confirm(`¿Estás seguro de resetear la contraseña de "${user.name}"?\nSe generará una nueva clave y se enviará por email.`)) return;
+
+    const newPwd = await resetUserPassword(user.id);
+    if (!newPwd) {
+      alert('Error al resetear la contraseña. Intenta de nuevo.');
+    }
+  };
+
+  const accountants = users.filter(u => u.role === UserRole.ACCOUNTANT || u.role === UserRole.CONTADOR);
   const getAccountantName = (id?: string) => {
     if (!id) return '—';
     const acc = accountants.find(a => a.id === id);
@@ -346,10 +564,10 @@ export const AdminDashboard: React.FC = () => {
         <button onClick={() => setActiveTab('settings')} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center ${activeTab === 'settings' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-600'}`}>
           <Settings className="w-4 h-4 mr-2" /> Configuración
         </button>
-        <button onClick={() => setActiveTab('complaints')} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center ${activeTab === 'complaints' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-600'}`}>
+        <button onClick={() => { setComplaintsPage(1); setActiveTab('complaints'); }} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center ${activeTab === 'complaints' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-600'}`}>
           <Book className="w-4 h-4 mr-2" /> Reclamos
         </button>
-        <button onClick={() => setActiveTab('companies')} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center ${activeTab === 'companies' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-600'}`}>
+        <button onClick={() => { setCompaniesPage(1); setActiveTab('companies'); }} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center ${activeTab === 'companies' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-600'}`}>
           <Building className="w-4 h-4 mr-2" /> Empresas
         </button>
       </div>
@@ -357,15 +575,38 @@ export const AdminDashboard: React.FC = () => {
       {activeTab === 'users' ? (
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex bg-gray-50 p-1 rounded-xl">
-              {[{ key: 'all', label: 'Todos' }, { key: SubscriptionStatus.ACTIVE, label: 'Activos' }, { key: SubscriptionStatus.EXPIRED, label: 'Vencidos' }, { key: SubscriptionStatus.PENDING, label: 'Pendientes' }].map(f => (
-                <button key={f.key} onClick={() => setSubFilter(f.key as any)}
-                  className={`px-4 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${subFilter === f.key ? 'bg-white text-brand-600 shadow-sm border border-brand-100' : 'text-gray-400'}`}>
-                  {f.label}
-                </button>
-              ))}
+            <div className="flex items-center gap-3 flex-wrap flex-1">
+              <div className="flex bg-gray-50 p-1 rounded-xl">
+                {[{ key: 'all', label: 'Todos' }, { key: SubscriptionStatus.ACTIVE, label: 'Activos' }, { key: SubscriptionStatus.EXPIRED, label: 'Vencidos' }, { key: SubscriptionStatus.PENDING, label: 'Pendientes' }].map(f => (
+                  <button key={f.key} onClick={() => { setSubFilter(f.key as any); setUsersPage(1); }}
+                    className={`px-4 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${subFilter === f.key ? 'bg-white text-brand-600 shadow-sm border border-brand-100' : 'text-gray-400'}`}>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="relative min-w-[240px] flex-1 max-w-md">
+                <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Buscar por nombre, correo, rol o RUC..."
+                  value={userSearchQuery}
+                  onChange={e => { setUserSearchQuery(e.target.value); setUsersPage(1); }}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-xl py-2 pl-10 pr-9 text-xs font-bold text-gray-800 placeholder-gray-400 focus:outline-none focus:border-brand-500 focus:bg-white transition-all shadow-sm"
+                />
+                {userSearchQuery && (
+                  <button
+                    onClick={() => { setUserSearchQuery(''); setUsersPage(1); }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                    title="Limpiar búsqueda"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
-            <button onClick={handleOpenCreateUser} className="bg-brand-600 text-white px-6 py-3 rounded-2xl hover:bg-brand-700 transition flex items-center font-black text-xs uppercase tracking-widest shadow-xl active:scale-95">
+
+            <button onClick={handleOpenCreateUser} className="bg-brand-600 text-white px-6 py-3 rounded-2xl hover:bg-brand-700 transition flex items-center font-black text-xs uppercase tracking-widest shadow-xl active:scale-95 shrink-0">
               <UserPlus className="w-4 h-4 mr-2" /> Nuevo Registro
             </button>
           </div>
@@ -384,19 +625,18 @@ export const AdminDashboard: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {(() => {
-                    const filtered = users.filter(u => subFilter === 'all' || u.subscriptionStatus === subFilter);
-                    const total = filtered.length;
+                    const total = filteredUsers.length;
                     const totalPages = Math.ceil(total / usersPerPage) || 1;
                     const currentPage = Math.min(usersPage, totalPages);
                     const start = (currentPage - 1) * usersPerPage;
                     const end = Math.min(start + usersPerPage, total);
-                    const pageItems = filtered.slice(start, end);
+                    const pageItems = filteredUsers.slice(start, end);
 
                     if (pageItems.length === 0) {
                       return (
                         <tr>
                           <td colSpan={5} className="py-12 text-center text-gray-400 text-xs font-bold italic">
-                            No se encontraron usuarios.
+                            {userSearchQuery ? `No se encontraron usuarios que coincidan con "${userSearchQuery}".` : 'No se encontraron usuarios.'}
                           </td>
                         </tr>
                       );
@@ -407,7 +647,7 @@ export const AdminDashboard: React.FC = () => {
                         <td className="px-6 py-4">
                           <div className="flex items-center space-x-3">
                             <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center overflow-hidden border">
-                               {user.profilePicture ? <img src={`data:image/jpeg;base64,${user.profilePicture}`} className="w-full h-full object-cover" /> : <UserIcon className="w-5 h-5 text-gray-400" />}
+                               {user.profilePicture ? <img src={formatImageUrl(user.profilePicture)} className="w-full h-full object-cover" /> : <UserIcon className="w-5 h-5 text-gray-400" />}
                             </div>
                             <div>
                               <p className="font-black text-gray-900 text-sm uppercase tracking-tighter leading-none mb-1">{user.name}</p>
@@ -438,14 +678,20 @@ export const AdminDashboard: React.FC = () => {
                               <span className={`px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase ${user.solUser && user.solPass ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
                                 {user.solUser && user.solPass ? 'SOL Configurado' : 'SOL Pendiente'}
                               </span>
+                              {user.mustChangePassword && (
+                                <span className="px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase bg-amber-100 text-amber-700">
+                                  Clave temporal
+                                </span>
+                              )}
                             </div>
                           )}
                         </td>
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end space-x-2">
-                            <button onClick={() => handleOpenEditUser(user)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"><Edit2 className="w-4 h-4" /></button>
-                            {user.role === UserRole.USER && <button onClick={() => setViewHistoryUser(user)} className="p-2 text-brand-600 hover:bg-brand-50 rounded-lg transition"><History className="w-4 h-4" /></button>}
-                            {user.id !== 'u1' && <button onClick={() => { if(confirm('¿Eliminar definitivamente?')) deleteUser(user.id) }} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>}
+                             <button onClick={() => handleOpenEditUser(user)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"><Edit2 className="w-4 h-4" /></button>
+                             <button onClick={() => handleResetPassword(user)} className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition" title="Resetear contraseña"><KeyRound className="w-4 h-4" /></button>
+                              {user.role === UserRole.USER && <button onClick={() => setViewHistoryUser(user)} className="p-2 text-brand-600 hover:bg-brand-50 rounded-lg transition"><History className="w-4 h-4" /></button>}
+                              {user.id !== 'u1' && <button onClick={() => { if(confirm('¿Eliminar definitivamente?')) deleteUser(user.id) }} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>}
                           </div>
                         </td>
                       </tr>
@@ -457,8 +703,7 @@ export const AdminDashboard: React.FC = () => {
 
             {/* CONTROLES DE PAGINACIÓN */}
             {(() => {
-              const filtered = users.filter(u => subFilter === 'all' || u.subscriptionStatus === subFilter);
-              const total = filtered.length;
+              const total = filteredUsers.length;
               const totalPages = Math.ceil(total / usersPerPage) || 1;
               const currentPage = Math.min(usersPage, totalPages);
               const start = total > 0 ? (currentPage - 1) * usersPerPage + 1 : 0;
@@ -635,11 +880,11 @@ export const AdminDashboard: React.FC = () => {
 
                                     const userStartStr = (hasActiveSub && reqUser.subscriptionStartDate) ? reqUser.subscriptionStartDate : startStr;
 
-                                    updateUser(reqUser.id, {
-                                      subscriptionStatus: SubscriptionStatus.ACTIVE,
-                                      subscriptionStartDate: userStartStr,
-                                      subscriptionEndDate: endStr
-                                    });
+  updateUser(reqUser.id, {
+                                       subscriptionStatus: SubscriptionStatus.ACTIVE,
+                                       subscriptionStartDate: userStartStr,
+                                       subscriptionEndDate: endStr
+                                     });
                                     updateSubscriptionRecord(rec.id, {
                                       status: 'PAID',
                                       startDate: startStr,
@@ -668,14 +913,14 @@ export const AdminDashboard: React.FC = () => {
                                       updateUser(reqUser.id, { subscriptionStatus: SubscriptionStatus.EXPIRED });
                                     }
                                     updateSubscriptionRecord(rec.id, { status: 'CANCELLED' });
-                                    addNotification({
-                                      id: Date.now().toString(),
-                                      userId: reqUser.id,
-                                      message: `Tu solicitud de pago para el ${rec.packageName} fue rechazada por el administrador.`,
-                                      date: new Date().toLocaleDateString('es-ES', { hour: '2-digit', minute: '2-digit' }),
-                                      isRead: false,
-                                      type: 'SUBSCRIPTION'
-                                    });
+                                     addNotification({
+                                       id: Date.now().toString(),
+                                       userId: reqUser.id,
+                                       message: `Tu solicitud de pago para el ${rec.packageName} fue rechazada por el administrador. Contacta a soporte por WhatsApp para resolver el inconveniente.`,
+                                       date: new Date().toLocaleDateString('es-ES', { hour: '2-digit', minute: '2-digit' }),
+                                       isRead: false,
+                                       type: 'SUBSCRIPTION'
+                                     });
                                   }}
                                   className="px-4 py-2 bg-red-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-red-700 transition shadow-md flex items-center gap-1"
                                 >
@@ -790,20 +1035,42 @@ export const AdminDashboard: React.FC = () => {
                        </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                       {complaints.length > 0 ? [...complaints].reverse().map(comp => (
-                          <tr key={comp.id} className="hover:bg-gray-50/50 transition-colors group">
-                             <td className="px-8 py-6">
-                                <p className="text-sm font-black text-gray-900 leading-none">{comp.date}</p>
-                                <p className="text-[10px] text-gray-400 font-bold mt-1 uppercase">{comp.time}</p>
-                             </td>
-                             <td className="px-8 py-6">
-                                <p className="text-sm font-black text-brand-900 uppercase tracking-tighter leading-none mb-1">{comp.userName}</p>
-                                <p className="text-[10px] text-gray-400 font-bold">{comp.userEmail}</p>
-                             </td>
-                             <td className="px-8 py-6">
-                                <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${comp.type === 'RECLAMO' ? 'bg-orange-100 text-orange-600' : 'bg-red-100 text-red-600'}`}>
-                                   {comp.type}
-                                </span>
+                       {(() => {
+                          const sorted = [...complaints].reverse();
+                          const total = sorted.length;
+                          const totalPages = Math.ceil(total / complaintsPerPage) || 1;
+                          const currentPage = Math.min(complaintsPage, totalPages);
+                          const start = (currentPage - 1) * complaintsPerPage;
+                          const end = Math.min(start + complaintsPerPage, total);
+                          const pageItems = sorted.slice(start, end);
+
+                          if (total === 0) {
+                             return (
+                                <tr>
+                                   <td colSpan={6} className="px-8 py-12 text-center">
+                                      <div className="flex flex-col items-center space-y-3 opacity-30">
+                                         <Book className="w-12 h-12 text-gray-400" />
+                                         <p className="text-sm font-black uppercase tracking-widest text-gray-400 italic">No hay reclamos registrados</p>
+                                      </div>
+                                   </td>
+                                </tr>
+                             );
+                          }
+
+                          return pageItems.map(comp => (
+                           <tr key={comp.id} className="hover:bg-gray-50/50 transition-colors group">
+                              <td className="px-8 py-6">
+                                 <p className="text-sm font-black text-gray-900 leading-none">{comp.date}</p>
+                                 <p className="text-[10px] text-gray-400 font-bold mt-1 uppercase">{comp.time}</p>
+                              </td>
+                              <td className="px-8 py-6">
+                                 <p className="text-sm font-black text-brand-900 uppercase tracking-tighter leading-none mb-1">{comp.userName}</p>
+                                 <p className="text-[10px] text-gray-400 font-bold">{comp.userEmail}</p>
+                              </td>
+                              <td className="px-8 py-6">
+                                 <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${comp.type === 'RECLAMO' ? 'bg-orange-100 text-orange-600' : 'bg-red-100 text-red-600'}`}>
+                                    {comp.type}
+                                 </span>
                               </td>
                               <td className="px-8 py-6 max-w-md">
                                  <p className="text-xs font-black text-gray-800 uppercase leading-tight mb-1">{comp.description}</p>
@@ -817,7 +1084,7 @@ export const AdminDashboard: React.FC = () => {
                               </td>
                               <td className="px-8 py-6 text-right">
                                  {comp.status === 'PENDIENTE' && (
-                                    <button 
+                                    <button
                                        onClick={() => updateComplaintStatus(comp.id, 'ATENDIDO')}
                                        className="px-4 py-2 bg-green-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-green-700 shadow-lg transition active:scale-95"
                                     >
@@ -826,19 +1093,77 @@ export const AdminDashboard: React.FC = () => {
                                  )}
                               </td>
                            </tr>
-                        )) : (
-                           <tr>
-                              <td colSpan={6} className="px-8 py-12 text-center">
-                                 <div className="flex flex-col items-center space-y-3 opacity-30">
-                                    <Book className="w-12 h-12 text-gray-400" />
-                                    <p className="text-sm font-black uppercase tracking-widest text-gray-400 italic">No hay reclamos registrados</p>
-                                 </div>
-                              </td>
-                           </tr>
-                        )}
-                     </tbody>
+                          ));
+                       })()}
+                    </tbody>
                   </table>
                </div>
+
+               {/* CONTROLES DE PAGINACIÓN */}
+               {(() => {
+                  const total = complaints.length;
+                  const totalPages = Math.ceil(total / complaintsPerPage) || 1;
+                  const currentPage = Math.min(complaintsPage, totalPages);
+                  const start = total > 0 ? (currentPage - 1) * complaintsPerPage + 1 : 0;
+                  const end = Math.min(currentPage * complaintsPerPage, total);
+
+                  return (
+                    <div className="p-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div className="flex items-center gap-3 text-xs font-bold text-gray-500">
+                        <span>Mostrando {start} - {end} de {total} reclamos</span>
+                        <span className="text-gray-300">|</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-black uppercase text-gray-400">Filas por página:</span>
+                          <select
+                            value={complaintsPerPage}
+                            onChange={(e) => {
+                              setComplaintsPerPage(Number(e.target.value));
+                              setComplaintsPage(1);
+                            }}
+                            className="bg-white border border-gray-200 rounded-lg px-2.5 py-1 text-xs font-bold text-gray-700 outline-none focus:border-brand-500 shadow-sm"
+                          >
+                            <option value={5}>5</option>
+                            <option value={10}>10</option>
+                            <option value={20}>20</option>
+                            <option value={50}>50</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-1.5">
+                        <button
+                          disabled={currentPage <= 1}
+                          onClick={() => setComplaintsPage(p => Math.max(1, p - 1))}
+                          className="px-3 py-1.5 rounded-xl border border-gray-200 bg-white text-xs font-black text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-100 transition shadow-sm flex items-center gap-1"
+                        >
+                          <ChevronLeft className="w-4 h-4" /> Anterior
+                        </button>
+
+                        {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                          <button
+                            key={p}
+                            onClick={() => setComplaintsPage(p)}
+                            className={`w-8 h-8 rounded-xl text-xs font-black transition ${
+                              currentPage === p
+                                ? 'bg-brand-600 text-white shadow-md'
+                                : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'
+                            }`}
+                          >
+                            {p}
+                          </button>
+                        ))}
+
+                        <button
+                          disabled={currentPage >= totalPages}
+                          onClick={() => setComplaintsPage(p => Math.min(totalPages, p + 1))}
+                          className="px-3 py-1.5 rounded-xl border border-gray-200 bg-white text-xs font-black text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-100 transition shadow-sm flex items-center gap-1"
+                        >
+                          Siguiente <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+               })()}
             </div>
          </div>
       ) : activeTab === 'companies' ? (
@@ -868,9 +1193,21 @@ export const AdminDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {companies.length === 0 ? (
-                    <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-xs font-bold italic">No hay empresas registradas.</td></tr>
-                  ) : companies.map(company => {
+                  {(() => {
+                    const total = companies.length;
+                    const totalPages = Math.ceil(total / companiesPerPage) || 1;
+                    const currentPage = Math.min(companiesPage, totalPages);
+                    const start = (currentPage - 1) * companiesPerPage;
+                    const end = Math.min(start + companiesPerPage, total);
+                    const pageItems = companies.slice(start, end);
+
+                    if (total === 0) {
+                      return (
+                        <tr><td colSpan={7} className="py-12 text-center text-gray-400 text-xs font-bold italic">No hay empresas registradas.</td></tr>
+                      );
+                    }
+
+                    return pageItems.map(company => {
                     const owner = users.find(u => u.id === company.ownerUserId);
                     const accountant = accountants.find(a => a.id === company.assignedAccountantId);
                     return (
@@ -913,94 +1250,362 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                       </tr>
                     );
-                  })}
+                  });
+                    })()}
                 </tbody>
               </table>
             </div>
+
+            {/* CONTROLES DE PAGINACIÓN */}
+            {(() => {
+              const total = companies.length;
+              const totalPages = Math.ceil(total / companiesPerPage) || 1;
+              const currentPage = Math.min(companiesPage, totalPages);
+              const start = total > 0 ? (currentPage - 1) * companiesPerPage + 1 : 0;
+              const end = Math.min(currentPage * companiesPerPage, total);
+
+              return (
+                <div className="p-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 text-xs font-bold text-gray-500">
+                    <span>Mostrando {start} - {end} de {total} empresas</span>
+                    <span className="text-gray-300">|</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-black uppercase text-gray-400">Filas por página:</span>
+                      <select
+                        value={companiesPerPage}
+                        onChange={(e) => {
+                          setCompaniesPerPage(Number(e.target.value));
+                          setCompaniesPage(1);
+                        }}
+                        className="bg-white border border-gray-200 rounded-lg px-2.5 py-1 text-xs font-bold text-gray-700 outline-none focus:border-brand-500 shadow-sm"
+                      >
+                        <option value={5}>5</option>
+                        <option value={10}>10</option>
+                        <option value={20}>20</option>
+                        <option value={50}>50</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-1.5">
+                    <button
+                      disabled={currentPage <= 1}
+                      onClick={() => setCompaniesPage(p => Math.max(1, p - 1))}
+                      className="px-3 py-1.5 rounded-xl border border-gray-200 bg-white text-xs font-black text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-100 transition shadow-sm flex items-center gap-1"
+                    >
+                      <ChevronLeft className="w-4 h-4" /> Anterior
+                    </button>
+
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                      <button
+                        key={p}
+                        onClick={() => setCompaniesPage(p)}
+                        className={`w-8 h-8 rounded-xl text-xs font-black transition ${
+                          currentPage === p
+                            ? 'bg-brand-600 text-white shadow-md'
+                            : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+
+                    <button
+                      disabled={currentPage >= totalPages}
+                      onClick={() => setCompaniesPage(p => Math.min(totalPages, p + 1))}
+                      className="px-3 py-1.5 rounded-xl border border-gray-200 bg-white text-xs font-black text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-100 transition shadow-sm flex items-center gap-1"
+                    >
+                      Siguiente <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
        ) : (
         /* CONFIGURACIÓN DE PAGOS Y PLANES - FONDOS CLAROS Y TEXTO NEGRO */
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fade-in-up">
            {/* GESTIÓN DE PLANES */}
-           <div className="bg-white p-8 rounded-[2.5rem] border-2 border-gray-100 shadow-sm space-y-6">
-              <div className="flex items-center space-x-3 mb-2">
-                 <div className="p-3 bg-brand-50 rounded-2xl text-brand-600"><Package className="w-6 h-6"/></div>
-                 <h3 className="text-sm font-black uppercase tracking-widest text-gray-800">Suscripciones Disponibles</h3>
-              </div>
-              
-              <div className="space-y-4">
-                 {packages.map(pkg => (
-                   <div key={pkg.id} className="p-6 bg-gray-50 rounded-3xl border border-gray-100 flex items-center justify-between group">
-                      <div>
-                         <p className="text-xs font-black text-gray-900 uppercase tracking-tighter mb-1">{pkg.name}</p>
-                         {editingPackageId === pkg.id ? (
-                            <div className="flex items-center space-x-2 mt-2">
-                               <div className="relative">
-                                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-                                  <input 
-                                    type="number" 
-                                    className="bg-white border-2 border-brand-200 rounded-xl p-2 pl-8 text-sm font-black text-gray-900 w-24 outline-none focus:border-brand-500" 
-                                    value={tempPrice} 
-                                    onChange={e => setTempPrice(e.target.value)} 
-                                  />
-                               </div>
-                               <button onClick={() => savePackage(pkg.id)} className="p-2 bg-green-500 text-white rounded-xl shadow-lg"><Check className="w-4 h-4"/></button>
-                            </div>
-                         ) : (
-                            <p className="text-xl font-black text-brand-700">S/ {pkg.price.toFixed(2)} <span className="text-[10px] text-gray-400">/ mes</span></p>
-                         )}
-                      </div>
-                      <button onClick={() => handleEditPackage(pkg)} className="p-3 bg-white border border-gray-200 text-gray-400 rounded-2xl hover:text-brand-600 hover:border-brand-200 shadow-sm transition opacity-0 group-hover:opacity-100">
-                         <Edit2 className="w-4 h-4" />
-                      </button>
-                   </div>
-                 ))}
-              </div>
-           </div>
+<section className="bg-white p-8 rounded-[2.5rem] border-2 border-gray-100 shadow-sm space-y-6">
+               <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3 mb-2">
+                     <div className="p-3 bg-brand-50 rounded-2xl text-brand-600"><Package className="w-6 h-6"/></div>
+                     <h3 className="text-sm font-black uppercase tracking-widest text-gray-800">Suscripciones Disponibles</h3>
+                  </div>
+                  <button onClick={() => handleOpenCreatePackage('CLIENT')} className="flex items-center space-x-1 px-4 py-2 bg-brand-600 text-white rounded-xl text-xs font-black uppercase hover:bg-brand-700 transition shadow-sm">
+                     <PlusCircle className="w-4 h-4" />
+                     <span>Agregar</span>
+                  </button>
+               </div>
+               
+                <div className="space-y-4">
+                   {packages.map(pkg => {
+                     const isFreePkg = pkg.isFree || pkg.id.includes('free');
+                     return (
+                     <div key={pkg.id} className="p-6 bg-gray-50 rounded-3xl border border-gray-100 flex items-center justify-between group">
+                        <div className="flex-1 min-w-0">
+                           <div className="flex items-center gap-2 mb-1">
+                              <p className="text-xs font-black text-gray-900 uppercase tracking-tighter">{pkg.name}</p>
+                              {isFreePkg && (
+                                 <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[8px] font-black uppercase rounded-full">
+                                    Por Defecto (Gratis)
+                                 </span>
+                              )}
+                           </div>
+                           <p className="text-xl font-black text-brand-700">S/ {pkg.price.toFixed(2)} <span className="text-[10px] text-gray-400">/ {pkg.durationMonths === 1 ? 'mes' : 'año'}</span></p>
+                           {pkg.features && pkg.features.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                 {pkg.features.map((feature: string, idx: number) => (
+                                    <span key={idx} className="text-[9px] font-bold bg-brand-50 text-brand-700 px-2 py-0.5 rounded-full">{feature}</span>
+                                 ))}
+                              </div>
+                           )}
+                        </div>
+                        <div className="flex items-center space-x-2 ml-4">
+                           <button onClick={() => handleEditPackage(pkg)} className="p-2 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition" title="Editar plan">
+                              <Edit2 className="w-4 h-4" />
+                           </button>
+                           {isFreePkg ? (
+                              <button disabled className="p-2 text-gray-300 rounded-lg opacity-40 cursor-not-allowed" title="El Plan Gratis no se puede eliminar">
+                                 <Trash2 className="w-4 h-4" />
+                              </button>
+                           ) : (
+                              <button onClick={() => handleDeletePackage(pkg.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition" title="Eliminar plan">
+                                 <Trash2 className="w-4 h-4" />
+                              </button>
+                           )}
+                        </div>
+                     </div>
+                   );
+                   })}
+                   {packages.length === 0 && (
+                      <p className="text-xs text-gray-400 text-center py-4">No hay suscripciones configuradas</p>
+                   )}
+                </div>
+            </section>
 
            {/* GESTIÓN DE PLANES CONTADOR */}
-           <div className="bg-white p-8 rounded-[2.5rem] border-2 border-gray-100 shadow-sm space-y-6">
-              <div className="flex items-center space-x-3 mb-2">
-                 <div className="p-3 bg-blue-50 rounded-2xl text-blue-600"><UserIcon className="w-6 h-6"/></div>
-                 <h3 className="text-sm font-black uppercase tracking-widest text-gray-800">Planes Contadores</h3>
-              </div>
-              
-              <div className="space-y-4">
-                 {accountantPackages.map(pkg => (
-                   <div key={pkg.id} className="p-6 bg-gray-50 rounded-3xl border border-gray-100 flex items-center justify-between group">
-                      <div>
-                         <p className="text-xs font-black text-gray-900 uppercase tracking-tighter mb-1">{pkg.name}</p>
-                         {editingAccountantPackageId === pkg.id ? (
-                            <div className="flex items-center space-x-2 mt-2">
-                               <div className="relative">
-                                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-                                  <input 
-                                    type="number" 
-                                    className="bg-white border-2 border-blue-200 rounded-xl p-2 pl-8 text-sm font-black text-gray-900 w-24 outline-none focus:border-blue-500" 
-                                    value={tempAccountantPrice} 
-                                    onChange={e => setTempAccountantPrice(e.target.value)} 
-                                  />
-                               </div>
-                               <button onClick={() => saveAccountantPackage(pkg.id)} className="p-2 bg-green-500 text-white rounded-xl shadow-lg"><Check className="w-4 h-4"/></button>
-                            </div>
-                         ) : (
-                            <p className="text-xl font-black text-blue-700">S/ {pkg.price.toFixed(2)} <span className="text-[10px] text-gray-400">/ {pkg.durationMonths === 1 ? 'mes' : 'año'}</span></p>
-                         )}
-                      </div>
-                      <button onClick={() => handleEditAccountantPackage(pkg)} className="p-3 bg-white border border-gray-200 text-gray-400 rounded-2xl hover:text-blue-600 hover:border-blue-200 shadow-sm transition opacity-0 group-hover:opacity-100">
-                         <Edit2 className="w-4 h-4" />
-                      </button>
-                   </div>
-                 ))}
-                 {accountantPackages.length === 0 && (
-                    <p className="text-xs text-gray-400 text-center py-4">No hay planes de contador configurados</p>
-                 )}
-              </div>
-           </div>
+<section className="bg-white p-8 rounded-[2.5rem] border-2 border-gray-100 shadow-sm space-y-6">
+               <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3 mb-2">
+                     <div className="p-3 bg-blue-50 rounded-2xl text-blue-600"><UserIcon className="w-6 h-6"/></div>
+                     <h3 className="text-sm font-black uppercase tracking-widest text-gray-800">Planes Contadores</h3>
+                  </div>
+                  <button onClick={() => handleOpenCreatePackage('ACCOUNTANT')} className="flex items-center space-x-1 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-black uppercase hover:bg-blue-700 transition shadow-sm">
+                     <PlusCircle className="w-4 h-4" />
+                     <span>Agregar</span>
+                  </button>
+               </div>
+               
+                <div className="space-y-4">
+                   {accountantPackages.map(pkg => {
+                     const isFreePkg = pkg.isFree || pkg.id.includes('free');
+                     return (
+                     <div key={pkg.id} className="p-6 bg-gray-50 rounded-3xl border border-gray-100 flex items-center justify-between group">
+                        <div className="flex-1 min-w-0">
+                           <div className="flex items-center gap-2 mb-1">
+                              <p className="text-xs font-black text-gray-900 uppercase tracking-tighter">{pkg.name}</p>
+                              {isFreePkg && (
+                                 <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[8px] font-black uppercase rounded-full">
+                                    Por Defecto (Gratis)
+                                 </span>
+                              )}
+                           </div>
+                           <p className="text-xl font-black text-blue-700">S/ {pkg.price.toFixed(2)} <span className="text-[10px] text-gray-400">/ {pkg.durationMonths === 1 ? 'mes' : 'año'}</span></p>
+                           {pkg.features && pkg.features.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                 {pkg.features.map((feature: string, idx: number) => (
+                                    <span key={idx} className="text-[9px] font-bold bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">{feature}</span>
+                                 ))}
+                              </div>
+                           )}
+                        </div>
+                        <div className="flex items-center space-x-2 ml-4">
+                           <button onClick={() => handleEditPackage(pkg)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="Editar plan">
+                              <Edit2 className="w-4 h-4" />
+                           </button>
+                           {isFreePkg ? (
+                              <button disabled className="p-2 text-gray-300 rounded-lg opacity-40 cursor-not-allowed" title="El Plan Gratis no se puede eliminar">
+                                 <Trash2 className="w-4 h-4" />
+                              </button>
+                           ) : (
+                              <button onClick={() => handleDeletePackage(pkg.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition" title="Eliminar plan">
+                                 <Trash2 className="w-4 h-4" />
+                              </button>
+                           )}
+                        </div>
+                     </div>
+                   );
+                   })}
+                   {accountantPackages.length === 0 && (
+                      <p className="text-xs text-gray-400 text-center py-4">No hay planes de contador configurados</p>
+                   )}
+                </div>
+</section>
 
-           {/* MÉTODOS DE PAGO Y QR */}
-           <div className="bg-white p-8 rounded-[2.5rem] border-2 border-gray-100 shadow-sm space-y-6">
+            {/* MODAL: AGREGAR / EDITAR PLAN */}
+            {showPackageForm && (
+               <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in">
+                  <div className="bg-white rounded-3xl border-2 border-gray-100 shadow-2xl w-full max-w-lg mx-4 p-8 space-y-6">
+                     <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-black uppercase tracking-widest text-gray-800">
+                           {isCreatingPackage ? 'Nuevo Plan' : 'Editar Plan'}
+                        </h3>
+                        <button onClick={() => { setShowPackageForm(false); setEditingPackageId(null); }} className="p-2 text-gray-400 hover:text-gray-600">
+                           <X className="w-5 h-5" />
+                        </button>
+                     </div>
+
+                     {isCreatingPackage && (
+                        <div>
+                           <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Tipo de Plan</label>
+                           <div className="flex space-x-3">
+                              <button
+                                type="button"
+                                 onClick={() => { setFormPackageType('CLIENT'); setFormPackageData(prev => ({ ...prev, limits: mergeLimits(prev.limits, 'CLIENT') })); }}
+                                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase ${formPackageType === 'CLIENT' ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                              >
+                                Cliente
+                              </button>
+                              <button
+                                type="button"
+                                 onClick={() => { setFormPackageType('ACCOUNTANT'); setFormPackageData(prev => ({ ...prev, limits: mergeLimits(prev.limits, 'ACCOUNTANT') })); }}
+                                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase ${formPackageType === 'ACCOUNTANT' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                              >
+                                Contador
+                              </button>
+                           </div>
+                        </div>
+                     )}
+
+                     <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Nombre del Plan</label>
+                        <input
+                          type="text"
+                          className="w-full border-2 border-gray-100 p-3 rounded-xl text-sm font-bold text-gray-900 bg-white outline-none focus:border-brand-500"
+                          value={formPackageData.name}
+                          onChange={e => setFormPackageData(prev => ({ ...prev, name: e.target.value }))}
+                          placeholder="Ej: Plan Mensual Emprendedor"
+                        />
+                     </div>
+
+                     <div className="grid grid-cols-2 gap-4">
+                        <div>
+                           <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Precio (S/)</label>
+                           <input
+                             type="number"
+                             step="0.01"
+                             min="0"
+                             className="w-full border-2 border-gray-100 p-3 rounded-xl text-sm font-bold text-gray-900 bg-white outline-none focus:border-brand-500"
+                             value={formPackageData.price}
+                             onChange={e => setFormPackageData(prev => ({ ...prev, price: e.target.value }))}
+                             placeholder="49.00"
+                           />
+                        </div>
+                        <div>
+                           <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Duración (meses)</label>
+                           <input
+                             type="number"
+                             min="1"
+                             className="w-full border-2 border-gray-100 p-3 rounded-xl text-sm font-bold text-gray-900 bg-white outline-none focus:border-brand-500"
+                             value={formPackageData.durationMonths}
+                             onChange={e => setFormPackageData(prev => ({ ...prev, durationMonths: e.target.value }))}
+                           />
+                        </div>
+                     </div>
+
+<div>
+                         <div className="flex items-center justify-between mb-2">
+                            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Características</label>
+                            <button type="button" onClick={handleAddFeature} className="text-[10px] font-black text-brand-600 hover:text-brand-700 uppercase">
+                               + Agregar
+                            </button>
+                         </div>
+                         <div className="space-y-2">
+                            {formPackageData.features.map((feature: string, idx: number) => (
+                               <div key={idx} className="flex items-center space-x-2">
+                                  <input
+                                    type="text"
+                                    className="flex-1 border-2 border-gray-100 p-2 rounded-xl text-xs font-bold text-gray-900 bg-white outline-none focus:border-brand-500"
+                                    value={feature}
+                                    onChange={e => handleFeatureChange(idx, e.target.value)}
+                                    placeholder={`Característica ${idx + 1}`}
+                                  />
+                                  {formPackageData.features.length > 1 && (
+                                     <button type="button" onClick={() => handleRemoveFeature(idx)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition">
+                                        <X className="w-4 h-4" />
+                                     </button>
+                                  )}
+                               </div>
+                            ))}
+                         </div>
+                      </div>
+
+                      <div>
+                         <div className="flex items-center justify-between mb-2">
+                            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Límites</label>
+                            <button type="button" onClick={handleAddLimitType} disabled={!isLimitTypeAvailable()} className={`text-[10px] font-black uppercase ${isLimitTypeAvailable() ? 'text-brand-600 hover:text-brand-700' : 'text-gray-300 cursor-not-allowed'}`}>
+                               + Agregar límite
+                            </button>
+                         </div>
+                          <div className="space-y-4">
+                            {Object.entries(formPackageData.limits).map(([limitKey, roleValues]) => {
+                               const relevantRole = formPackageType === 'ACCOUNTANT' ? 'ACCOUNTANT' : 'USER';
+                               const relevantLabel = relevantRole === 'USER' ? 'Empresario' : 'Contador';
+                               const value = roleValues[relevantRole];
+                               return (
+                               <div key={limitKey} className="p-4 bg-gray-50 rounded-2xl border border-gray-100 space-y-3">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs font-black text-gray-700 uppercase">
+                                       {getLimitTypeLabel(limitKey)}
+                                    </span>
+                                     <button type="button" onClick={() => handleRemoveLimitType(limitKey)} className="p-1 text-red-400 hover:text-red-600">
+                                        <X className="w-4 h-4" />
+                                     </button>
+                                  </div>
+                                  <div>
+                                     <label className="text-[9px] font-black text-gray-400 uppercase block mb-1">{relevantLabel}</label>
+                                     <input
+                                       type="number"
+                                       min="0"
+                                       className="w-full border-2 border-gray-100 p-2 rounded-xl text-xs font-bold text-gray-900 bg-white outline-none focus:border-brand-500"
+                                       value={value ?? ''}
+                                       onChange={e => handleLimitValueChange(limitKey, relevantRole, e.target.value)}
+                                       placeholder="Sin límite"
+                                     />
+                                  </div>
+                               </div>
+                               );
+                            })}
+                            {Object.keys(formPackageData.limits).length === 0 && (
+                               <p className="text-[10px] text-gray-400 text-center py-2">Sin límites configurados</p>
+                            )}
+                          </div>
+                      </div>
+
+                      <div className="flex items-center justify-end space-x-3 pt-4">
+                        <button
+                          type="button"
+                          onClick={() => { setShowPackageForm(false); setEditingPackageId(null); }}
+                          className="px-5 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-xs font-black uppercase hover:bg-gray-200 transition"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSavePackage}
+                          className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-xs font-black uppercase hover:bg-brand-700 transition shadow-sm"
+                        >
+                          {isCreatingPackage ? 'Crear Plan' : 'Guardar Cambios'}
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            )}
+
+            {/* MÉTODOS DE PAGO Y QR */}
+            <div className="bg-white p-8 rounded-[2.5rem] border-2 border-gray-100 shadow-sm space-y-6">
               <div className="flex items-center space-x-3 mb-2">
                  <div className="p-3 bg-green-50 rounded-2xl text-green-600"><Smartphone className="w-6 h-6"/></div>
                  <h3 className="text-sm font-black uppercase tracking-widest text-gray-800">Recaudación (QR Yape/Plin)</h3>
@@ -1036,7 +1641,7 @@ export const AdminDashboard: React.FC = () => {
                            <div>
                               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Código QR (Imagen)</label>
                               <div className="flex items-center space-x-4">
-                                 {tempQrImage && <img src={`data:image/jpeg;base64,${tempQrImage}`} className="w-16 h-16 rounded-lg object-contain border bg-white" />}
+                                 {tempQrImage && <img src={formatImageUrl(tempQrImage)} className="w-16 h-16 rounded-lg object-contain border bg-white" />}
                                  <button onClick={() => qrFileInputRef.current?.click()} className="flex-1 py-3 border-2 border-dashed rounded-xl text-[10px] font-black uppercase text-gray-400 hover:border-brand-500 hover:text-brand-600 transition">Cambiar QR</button>
                                  <input type="file" ref={qrFileInputRef} className="hidden" accept="image/*" onChange={handleQrUpload} />
                               </div>
@@ -1047,7 +1652,7 @@ export const AdminDashboard: React.FC = () => {
 
                       {method.qrImage && !editingMethodId && (
                          <div className="mt-2 flex justify-center p-4 bg-white rounded-2xl border border-dashed border-gray-200">
-                            <img src={`data:image/jpeg;base64,${method.qrImage}`} className="w-32 h-32 object-contain" alt="QR Code" />
+                            <img src={formatImageUrl(method.qrImage)} className="w-32 h-32 object-contain" alt="QR Code" />
                          </div>
                       )}
                    </div>
@@ -1077,34 +1682,68 @@ export const AdminDashboard: React.FC = () => {
                   </a>
                </div>
 
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-brand-50/30 rounded-3xl border-2 border-brand-50">
-                  <div className="md:col-span-2">
-                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Token Maestro APISUNAT.pe</label>
-                     <input 
-                        type="password" 
-                        className="w-full bg-white border-2 border-brand-100 p-4 rounded-2xl text-sm font-mono focus:border-brand-500 outline-none shadow-sm"
-                        placeholder="Bearer Token..."
-                        value={sunatGlobalConfig.sunatToken}
-                        onChange={e => updateSunatGlobalConfig({ sunatToken: e.target.value })}
-                     />
-                  </div>
-                  <div>
-                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Entorno por Defecto</label>
-                     <select 
-                        className="w-full bg-white border-2 border-brand-100 p-4 rounded-2xl text-sm font-black text-gray-900 outline-none"
-                        value={sunatGlobalConfig.sunatApiUrl}
-                        onChange={e => updateSunatGlobalConfig({ sunatApiUrl: e.target.value })}
-                     >
-                        <option value="https://sandbox.apisunat.pe/api/v3">Pruebas (Sandbox)</option>
-                        <option value="https://api.apisunat.com/api/v3">Real (Producción)</option>
-                     </select>
-                  </div>
-                  <div className="flex items-end">
-                     <p className="text-[9px] text-gray-400 font-black uppercase leading-tight italic">
-                        * Este token maestro se aplicará automáticamente a todos los usuarios para la emisión de comprobantes.
-                     </p>
-                  </div>
-               </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-brand-50/30 rounded-3xl border-2 border-brand-50">
+                   <div className="md:col-span-2">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Token Maestro APISUNAT.pe</label>
+                      <input 
+                         type="password" 
+                         className="w-full bg-white border-2 border-brand-100 p-4 rounded-2xl text-sm font-mono focus:border-brand-500 outline-none shadow-sm"
+                         placeholder="Bearer Token..."
+                         value={configForm.sunatToken}
+                         onChange={e => setConfigForm(prev => ({ ...prev, sunatToken: e.target.value }))}
+                      />
+                   </div>
+                   <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Entorno por Defecto</label>
+                      <select 
+                         className="w-full bg-white border-2 border-brand-100 p-4 rounded-2xl text-sm font-black text-gray-900 outline-none"
+                         value={configForm.sunatApiUrl}
+                         onChange={e => setConfigForm(prev => ({ ...prev, sunatApiUrl: e.target.value }))}
+                      >
+                         <option value="https://sandbox.apisunat.pe/api/v3">Pruebas (Sandbox)</option>
+                         <option value="https://api.apisunat.com/api/v3">Real (Producción)</option>
+                      </select>
+                   </div>
+                   <div className="flex items-end">
+                      <p className="text-[9px] text-gray-400 font-black uppercase leading-tight italic">
+                         * Este token maestro se aplicará automáticamente a todos los usuarios para la emisión de comprobantes.
+                      </p>
+                   </div>
+                   <div className="md:col-span-2 border-t border-brand-100 pt-4 mt-2">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 flex items-center gap-1.5">
+                         <Smartphone className="w-4 h-4 text-emerald-600" /> Teléfono / WhatsApp de Soporte Oficial (Plataforma y Pagos)
+                      </label>
+                      <input 
+                         type="text" 
+                         className="w-full bg-white border-2 border-brand-100 p-4 rounded-2xl text-sm font-bold text-gray-900 focus:border-brand-500 outline-none shadow-sm"
+                         placeholder="Ej. 999888777 o 51999888777"
+                         value={configForm.supportPhone}
+                         onChange={e => setConfigForm(prev => ({ ...prev, supportPhone: e.target.value }))}
+                      />
+                      <p className="text-[9px] text-gray-400 font-bold uppercase tracking-wider mt-1.5">
+                         * Este número se utilizará para los botones de soporte por WhatsApp en la plataforma (atención premium, rechazos de pago y consultas).
+                      </p>
+                   </div>
+                   <div className="md:col-span-2 border-t-2 border-brand-100 pt-6 mt-2 flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div>
+                         {isConfigSaved && (
+                            <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 px-4 py-2.5 rounded-xl text-xs font-bold animate-fade-in">
+                               <CheckCircle2 className="w-4 h-4 text-emerald-600" /> ¡Configuración guardada con éxito!
+                            </div>
+                         )}
+                      </div>
+                      <button
+                         onClick={() => {
+                            updateSunatGlobalConfig(configForm);
+                            setIsConfigSaved(true);
+                            setTimeout(() => setIsConfigSaved(false), 3000);
+                         }}
+                         className="w-full sm:w-auto px-6 py-3.5 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl text-xs font-black uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2"
+                      >
+                         <Save className="w-4 h-4" /> Guardar Configuración
+                      </button>
+                   </div>
+                </div>
             </div>
          </div>
       )}
@@ -1130,15 +1769,16 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                   <div>
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Rol</label>
-                    <select className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-black text-gray-900 bg-white" value={userFormData.role} onChange={e => setUserFormData({...userFormData, role: e.target.value as UserRole})}>
-                      <option value={UserRole.USER}>Usuario Final</option>
-                      <option value={UserRole.ACCOUNTANT}>Contador Profesional</option>
-                      <option value={UserRole.ADMIN}>Administrador Sistema</option>
-                    </select>
+<select className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-black text-gray-900 bg-white" value={userFormData.role} onChange={e => setUserFormData({...userFormData, role: e.target.value as UserRole})}>
+    <option value={UserRole.USER}>Empresario</option>
+    <option value={UserRole.ACCOUNTANT}>Contador</option>
+    <option value={UserRole.ADMIN}>Administrador Sistema</option>
+    <option value={UserRole.PERSONA_NATURAL}>Persona Natural</option>
+</select>
                   </div>
                   {(userFormData.role === UserRole.USER || userFormData.role === UserRole.ACCOUNTANT) && (
                     <div>
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Estado</label>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Suscripción</label>
                       <select className="w-full border-2 border-gray-100 p-3.5 rounded-2xl text-sm font-black text-gray-900 bg-white" value={userFormData.subscriptionStatus} onChange={e => setUserFormData({...userFormData, subscriptionStatus: e.target.value as SubscriptionStatus})}>
                         <option value={SubscriptionStatus.ACTIVE}>Activo</option>
                         <option value={SubscriptionStatus.PENDING}>Pendiente</option>
@@ -1233,7 +1873,7 @@ export const AdminDashboard: React.FC = () => {
               {previewVoucherRec.voucherImage ? (
                 <div className="rounded-2xl border-2 border-brand-100 overflow-hidden bg-gray-50 flex items-center justify-center p-2">
                   <img
-                    src={`data:image/jpeg;base64,${previewVoucherRec.voucherImage}`}
+                    src={formatImageUrl(previewVoucherRec.voucherImage)}
                     alt="Voucher de pago"
                     className="max-h-96 w-full object-contain rounded-xl shadow-md bg-white"
                   />
@@ -1261,11 +1901,11 @@ export const AdminDashboard: React.FC = () => {
                       const endStr = endDate.toISOString().split('T')[0];
                       const userStartStr = (hasActiveSub && reqUser.subscriptionStartDate) ? reqUser.subscriptionStartDate : startStr;
 
-                      updateUser(reqUser.id, {
-                        subscriptionStatus: SubscriptionStatus.ACTIVE,
-                        subscriptionStartDate: userStartStr,
-                        subscriptionEndDate: endStr
-                      });
+updateUser(reqUser.id, {
+                         subscriptionStatus: SubscriptionStatus.ACTIVE,
+                         subscriptionStartDate: userStartStr,
+                         subscriptionEndDate: endStr
+                       });
                       updateSubscriptionRecord(previewVoucherRec.id, { status: 'PAID', startDate: startStr, endDate: endStr });
                       addNotification({
                         id: Date.now().toString(),
@@ -1295,7 +1935,7 @@ export const AdminDashboard: React.FC = () => {
                       addNotification({
                         id: Date.now().toString(),
                         userId: reqUser.id,
-                        message: `Tu solicitud de pago para el ${previewVoucherRec.packageName} fue rechazada por el administrador.`,
+                        message: `Tu solicitud de pago para el ${previewVoucherRec.packageName} fue rechazada por el administrador. Contacta a soporte por WhatsApp para resolver el inconveniente.`,
                         date: new Date().toLocaleDateString('es-ES', { hour: '2-digit', minute: '2-digit' }),
                         isRead: false,
                         type: 'SUBSCRIPTION'
@@ -1423,6 +2063,35 @@ export const AdminDashboard: React.FC = () => {
                 <button type="submit" className="flex-1 py-4 bg-brand-600 text-white rounded-2xl font-black uppercase text-xs shadow-xl shadow-brand-100">Guardar Empresa</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* PASSWORD RESET MODAL */}
+      {passwordResetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 animate-fade-in">
+          <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md p-8 text-center animate-fade-in-up relative">
+            <button onClick={() => setPasswordResetUser(null)} className="absolute top-4 right-4 p-1 text-gray-400 hover:text-gray-600 transition"><X className="w-5 h-5" /></button>
+            <div className="w-16 h-16 bg-purple-50 border-2 border-purple-200 rounded-2xl flex items-center justify-center mx-auto mb-6">
+              <KeyRound className="w-8 h-8 text-purple-600" />
+            </div>
+            <h3 className="text-xl font-black text-gray-900 mb-2">
+              Contraseña restablecida — {passwordResetUser.name}
+            </h3>
+            <p className="text-[10px] font-black text-gray-400 uppercase mb-4">
+              Clave temporal generada y enviada
+            </p>
+            <div className="bg-purple-50 border border-purple-200 rounded-2xl p-4 mb-4 text-left">
+              <p className="text-[10px] text-gray-600 font-bold leading-relaxed">
+                La nueva clave fue enviada por email a <span className="text-gray-900">{passwordResetUser.email}</span>. El usuario deberá cambiarla al iniciar sesión.
+              </p>
+            </div>
+            <button
+              onClick={() => setPasswordResetUser(null)}
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-4 rounded-2xl text-xs uppercase tracking-widest shadow-lg shadow-purple-500/25 transition-all active:scale-[0.98]"
+            >
+              Entendido
+            </button>
           </div>
         </div>
       )}
