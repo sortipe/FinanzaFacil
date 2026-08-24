@@ -1,70 +1,3 @@
-# Despliegue en Producción de FinanzaFacil
-
-## 📋 Resumen del Proyecto
-
-Esta aplicación de gestión financiera completa combina una interfaz de usuario React/Vite con un backend Node.js/Express que incluye integración SUNAT, soporte de base de datos MySQL, generación de PDF, workers de reintentos y múltiples módulos de negocio (facturación, contabilidad, nómina, etc.).
-
-## 🚀 Guía de Despliegue Rápido
-
-### Prerequisites
-
-- Cuenta en GitHub
-- Servidor/hostinger con Node.js 18+ instalado
-- Variables de entorno configuradas
-
-### 1. Configurar CI/CD en GitHub
-
-```bash
-# Crear archivo .github/workflows/deploy.yml (ver abajo para contenido completo)
-git add .github/workflows/deploy.yml
-git commit -m "feat: agregar pipeline CI/CD"
-git push
-```
-
-### 2. Configurar Variables de Producción
-
-```bash
-# .env.production.template (copiar y editar)
-cat .env.production.template > .env.production
-# Editar variables en .env.production
-```
-
-### 3. Desplegar desde GitHub Actions o Localmente
-
-```bash
-# Opción A: Desplegar desde CI/CD (recomendado)
-# GitHub Actions se encarga de todo
-
-# Opción B: Desplegar manualmente
-./scripts/deployscript.sh
-```
-
-### 4. Acceder a la Aplicación
-
-- Frontend: `http://your-domain.com` (puerto 3000)
-- Backend API: `http://your-domain.com/api`
-
-## 📁 Estructura de Directorios
-
-```
-FinanzaFacil/
-├── .github/workflows/deploy.yml          # Pipeline CI/CD
-├── .env.production.template              # Variables de entorno plantilla
-├── Procfile                               # Procesos de producción
-├── scripts/deployscript.sh                # Script de despliegue
-├── README.md                              # Esta guía
-├── dist/                                  # Build frontend (generado)
-├── server/                                # Backend code
-├── components/                            # React components
-├── pages/                                 # React pages
-└── ...                                    # Otros archivos fuente
-```
-
-## 🛠️ Scripts de Deployment
-
-### scripts/deployscript.sh
-
-```bash
 #!/bin/bash
 
 # Script de despliegue para FinanzaFacil
@@ -76,12 +9,6 @@ set -e  # Salir en caso de error
 echo_red() { echo "\033[0;31m$1\033[0m"; }
 echo_green() { echo "\033[0;32m$1\033[0m"; }
 echo_yellow() { echo "\033[1;33m$1\033[0m"; }
-
-# Configuración
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FRONTEND_DIR="$PROJECT_ROOT"
-BACKEND_DIR="$PROJECT_ROOT/server"
-BUILD_DIR="$FRONTEND_DIR/dist"
 
 # Log function
 log() {
@@ -125,7 +52,7 @@ install_dependencies() {
     log "Instalando dependencias..."
     
     # Instalar dependencias del frontend
-    cd "$FRONTEND_DIR"
+    cd "$(dirname "$0")/.."
     
     if [ ! -d "node_modules" ]; then
         log "Instalando dependencias del frontend..."
@@ -135,32 +62,34 @@ install_dependencies() {
     fi
     
     # Instalar dependencias del backend
-    if [ -f "$BACKEND_DIR/package.json" ]; then
+    if [ -f "server/package.json" ]; then
         log "Instalando dependencias del backend..."
-        cd "$BACKEND_DIR"
+        cd "server"
         if [ ! -d "node_modules" ]; then
             npm ci || npm install
         else
             log "Dependencies del backend ya instaladas"
         fi
+        cd ".."
     fi
     
-    cd "$PROJECT_ROOT"
+    cd "$(dirname "$0")/.."
 }
 
 # Construir el frontend
 build_frontend() {
     log "Construyendo el frontend..."
     
-    if [ -d "$BUILD_DIR" ]; then
+    if [ ! -d "dist" ]; then
+        log "Build del frontend no encontrado, construyendo..."
+        npm run build
+    else
         log "Build del frontend ya existe, limpiando..."
-        rm -rf "$BUILD_DIR"
+        rm -rf dist
+        npm run build
     fi
     
-    cd "$FRONTEND_DIR"
-    npm run build
-    
-    if [ ! -d "$BUILD_DIR" ]; then
+    if [ ! -d "dist" ]; then
         handle_error "Build del frontend falló - directorio dist no encontrado"
     fi
     
@@ -171,11 +100,11 @@ build_frontend() {
 build_backend() {
     log "Construyendo backend..."
     
-    if [ -f "$BACKEND_DIR/package.json" ] && grep -q "build" "$BACKEND_DIR/package.json"; then
-        cd "$BACKEND_DIR"
+    if [ -f "server/package.json" ] && grep -q "build" "server/package.json"; then
+        cd "server"
         log "Construyendo backend..."
         npm run build || log "Advertencia: script de build del backend falló o no está definido"
-        cd "$PROJECT_ROOT"
+        cd ".."
     else
         log "No hay script de build del backend, usando código source directamente"
     fi
@@ -197,9 +126,9 @@ setup_server() {
         fi
         
         # Iniciar servidor
-        cd "$BACKEND_DIR"
-        pm2 start server/index.js --name FinanzaFacil-Backend --time
-        cd "$PROJECT_ROOT"
+        cd "server"
+        pm2 start index.js --name FinanzaFacil-Backend --time
+        cd ".."
         
         log "✓ Servidor backend iniciado con PM2"
     else
@@ -229,15 +158,15 @@ verify_deployment() {
     log "Verificando despliegue..."
     
     # Comprobar que el build existe
-    if [ ! -d "$BUILD_DIR" ]; then
+    if [ ! -d "dist" ]; then
         handle_error "Directorio build frontend no encontrado"
     fi
     
     # Comprobar archivos críticos
     local critical_files=(
-        "$FRONTEND_DIR/index.html"
-        "$FRONTEND_DIR/package.json"
-        "$FRONTEND_DIR/.env.production.template"
+        "dist/index.html"
+        "package.json"
+        ".env.production.template"
     )
     
     for file in "${critical_files[@]}"; do
@@ -273,4 +202,3 @@ main() {
 
 # Ejecutar función principal
 main "$@"
-```
