@@ -78,6 +78,27 @@ export const ProformaWizard: React.FC<ProformaWizardProps> = ({
     return () => { isMounted = false; };
   }, [isOpen, selectedCompanyId, serie]);
 
+  // Due Date calculation
+  const dueDate = useMemo(() => {
+    const d = new Date(issueDate);
+    d.setDate(d.getDate() + Number(validityDays));
+    return d.toISOString().split('T')[0];
+  }, [issueDate, validityDays]);
+
+  // Calculations
+  const { subtotal, igv, total } = useMemo(() => {
+    const rawTotal = items.reduce((acc, i) => acc + (parseFloat(i.subtotal as any) || 0), 0);
+    if (includesIgv) {
+      const sub = +(rawTotal / 1.18).toFixed(2);
+      const tax = +(rawTotal - sub).toFixed(2);
+      return { subtotal: sub, igv: tax, total: rawTotal };
+    } else {
+      const tax = +(rawTotal * 0.18).toFixed(2);
+      const tot = +(rawTotal + tax).toFixed(2);
+      return { subtotal: rawTotal, igv: tax, total: tot };
+    }
+  }, [items, includesIgv]);
+
   if (!isOpen) return null;
 
   // Search Customer
@@ -114,26 +135,7 @@ export const ProformaWizard: React.FC<ProformaWizardProps> = ({
     }
   };
 
-  // Due Date calculation
-  const dueDate = useMemo(() => {
-    const d = new Date(issueDate);
-    d.setDate(d.getDate() + Number(validityDays));
-    return d.toISOString().split('T')[0];
-  }, [issueDate, validityDays]);
-
-  // Calculations
-  const { subtotal, igv, total } = useMemo(() => {
-    const rawTotal = items.reduce((acc, i) => acc + (parseFloat(i.subtotal as any) || 0), 0);
-    if (includesIgv) {
-      const sub = +(rawTotal / 1.18).toFixed(2);
-      const tax = +(rawTotal - sub).toFixed(2);
-      return { subtotal: sub, igv: tax, total: rawTotal };
-    } else {
-      const tax = +(rawTotal * 0.18).toFixed(2);
-      const tot = +(rawTotal + tax).toFixed(2);
-      return { subtotal: rawTotal, igv: tax, total: tot };
-    }
-  }, [items, includesIgv]);
+  // Item management
 
   // Items Management
   const handleAddItem = () => {

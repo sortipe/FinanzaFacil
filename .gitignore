@@ -25,6 +25,26 @@ dist-ssr
 
 .vercel
 
+# Workspace / CLI internal caches
+.kilo/
+.omo/
+.codegraph/
+
+# Archivos temporales, zips y evidencias
+*.zip
+*.pfx
+*.docx
+evidencias/
+imagenes_analizar/
+test_rh.js
+test-upload.txt
+upload-test.png
+({
+
+# Respaldos y uploads del servidor
+server/backups/
+server/uploads/
+
 # Secretos / configuración local (no commitear)
 opencode.json
 server/.env

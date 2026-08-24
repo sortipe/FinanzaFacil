@@ -12,6 +12,7 @@ import { TicketVentaWizard } from '../components/TicketVentaWizard';
 import { ProformaWizard } from '../components/ProformaWizard';
 import { OrdenPagoWizard } from '../components/OrdenPagoWizard';
 import { NotaVentaWizard } from '../components/NotaVentaWizard';
+import { SireModule } from '../components/SireModule';
 import { FileTreeModal } from '../components/FileTreeModal';
 import { analyzeReceiptOCR } from '../services/ocrService';
 import { formatImageUrl } from '../utils/imageUtils';
@@ -28,7 +29,7 @@ import { InvoiceWizard } from '../components/InvoiceWizard';
 import NoteWizard from '../components/NoteWizard';
 import { Payment } from '../pages/Payment';
 import { InvoicePreview, InvoicePreviewData } from '../components/InvoicePreview';
-import { generarPdfDesdeElemento } from '../services/pdfService';
+import { generarPdfDesdeElemento, descargarBlob } from '../services/pdfService';
 import { enviarComprobanteWhatsApp, construirMensajeComprobante, esCelularValido, EnvioWhatsAppResult, generarLinkSoportePago } from '../utils/whatsapp';
 
 export const UserDashboard: React.FC = () => {
@@ -135,6 +136,7 @@ export const UserDashboard: React.FC = () => {
   const [showProformaModal, setShowProformaModal] = useState(false);
   const [showOrdenPagoModal, setShowOrdenPagoModal] = useState(false);
   const [showNotaVentaModal, setShowNotaVentaModal] = useState(false);
+  const [showSireModal, setShowSireModal] = useState(false);
   const [userSubTab, setUserSubTab] = useState<'all' | 'factura' | 'boleta' | 'nc' | 'nd' | 'rh'>('all');
   const [previewDoc, setPreviewDoc] = useState<TaxDocument | null>(null);
   const waPdfRef = useRef<HTMLDivElement>(null);
@@ -287,7 +289,21 @@ export const UserDashboard: React.FC = () => {
         removePendingInvoice(inv.id);
         const paddedCorr = typeof inv.correlative === 'number' ? String(inv.correlative).padStart(8, '0') : '00000001';
         const isNCND = inv.documentType === 'nota_credito' || inv.documentType === 'nota_debito';
-        const docName = isNCND ? `${inv.documentType === 'nota_credito' ? 'N. Crédito' : 'N. Débito'} ${inv.serie}-${paddedCorr}` : `${inv.serie}-${paddedCorr}`;
+        const isLiq = inv.documentType === 'liquidacion_compra';
+        const isGuiaRem = inv.documentType === 'guia_remision';
+        const isGuiaTransp = inv.documentType === 'guia_transportista';
+
+        let docName = `${inv.serie}-${paddedCorr}`;
+        if (inv.documentType === 'nota_credito') docName = `N. Crédito ${inv.serie}-${paddedCorr}`;
+        else if (inv.documentType === 'nota_debito') docName = `N. Débito ${inv.serie}-${paddedCorr}`;
+        else if (isLiq) docName = `Liquidación de Compra ${inv.serie}-${paddedCorr} - ${inv.customerName || ''}`;
+        else if (isGuiaRem) docName = `Guía de Remisión ${inv.serie}-${paddedCorr} - ${inv.customerName || ''}`;
+        else if (isGuiaTransp) docName = `Guía Transportista ${inv.serie}-${paddedCorr} - ${inv.customerName || ''}`;
+
+        const resolvedDocType: TaxDocument['documentType'] = isNCND || isLiq || isGuiaRem || isGuiaTransp
+          ? inv.documentType
+          : (inv.documentType === 'boleta' ? 'boleta' : 'factura');
+
         addTaxDocument({
           id: inv.id,
           userId: inv.userId,
@@ -306,8 +322,16 @@ export const UserDashboard: React.FC = () => {
           periodYear: new Date().getFullYear(),
           sunatStatus: 'SENT',
           sunatHash: Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join(''),
-          documentType: isNCND ? inv.documentType : undefined,
-          originalDocumentId: inv.originalDocumentId
+          documentType: resolvedDocType,
+          originalDocumentId: inv.originalDocumentId,
+          metadata: {
+            recipientName: inv.customerName,
+            recipientRuc: inv.customerDocNumber,
+            recipientPhone: inv.customerPhone,
+            amount: inv.amount,
+            netAmount: inv.amount,
+            date: inv.createdAt || new Date().toISOString().split('T')[0]
+          }
         });
       } else {
         updatePendingInvoiceStatus(inv.id, 'PENDIENTE', result.error || 'Error del servidor SUNAT');
@@ -463,19 +487,9 @@ export const UserDashboard: React.FC = () => {
     }
   };
 
-  const pendingRef = useRef(pendingInvoices);
-  pendingRef.current = pendingInvoices;
+  // El reintento automático ahora vive en el servidor (server/retry-worker.js).
+  // Aquí solo se conservan los reintentos manuales (botones Reintentar / Reintentar Todo).
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const pendings = pendingRef.current.filter(p => p.userId === currentUser?.id && p.status === 'PENDIENTE' && (p.attemptCount || 0) < MAX_RETRY_ATTEMPTS);
-      if (pendings.length > 0) {
-        pendings.forEach(inv => retryPendingInvoice(inv));
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [currentUser?.id]);
-  
   const downloadFile = (content: string, filename: string, type: string, isBase64: boolean = false) => {
     try {
       let blob;
@@ -680,6 +694,8 @@ export const UserDashboard: React.FC = () => {
         id: `eg-${e.id}`,
         type: 'EGRESO' as const,
         amount: e.amount,
+        currency: e.currency || 'PEN',
+        category: e.category,
         description: e.description,
         date: e.date,
         exp: e,
@@ -687,7 +703,10 @@ export const UserDashboard: React.FC = () => {
       };
     });
 
-    return [...ingList, ...egList].sort((a, b) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime());
+    return [...ingList, ...egList].sort((a, b) => {
+      const diff = new Date(b.date || '').getTime() - new Date(a.date || '').getTime();
+      return diff !== 0 ? diff : b.id.localeCompare(a.id);
+    });
   }, [userCompanyDocs, myExpenses]);
 
   const stats = useMemo(() => {
@@ -1061,20 +1080,19 @@ export const UserDashboard: React.FC = () => {
     addTaxDocument(newDoc);
   };
 
+  const [isGeneratingPreviewPdf, setIsGeneratingPreviewPdf] = useState(false);
+
   const previewWhatsAppData = useMemo((): InvoicePreviewData | null => {
     if (!previewDoc) return null;
-    const phone = previewDoc.metadata?.recipientPhone;
-    const hasPhone = !!phone && esCelularValido(phone);
-    if (!hasPhone && !previewDoc.xmlContent) return null;
     return {
       documentType: previewDoc.documentType || 'factura',
       serieNumero: previewDoc.name,
       issueDate: previewDoc.uploadDate,
-      emitterName: selectedCompany?.name || selectedCompany?.businessName || 'MI EMPRESA S.A.C.',
-      emitterRuc: selectedCompany?.ruc || '',
-      emitterAddress: selectedCompany?.taxAddress || '',
-      customerName: previewDoc.metadata?.recipientName || '',
-      customerDocNumber: previewDoc.metadata?.recipientRuc || '',
+      emitterName: selectedCompany?.name || selectedCompany?.businessName || currentUser?.name || 'MI EMPRESA S.A.C.',
+      emitterRuc: selectedCompany?.ruc || currentUser?.ruc || '20000000001',
+      emitterAddress: selectedCompany?.taxAddress || 'LIMA, PERÚ',
+      customerName: previewDoc.metadata?.recipientName || 'CLIENTE GENERAL',
+      customerDocNumber: previewDoc.metadata?.recipientRuc || '00000000',
       customerDocTypeLabel: (previewDoc.metadata?.recipientRuc?.length === 8) ? 'DNI' : 'RUC',
       customerPhone: previewDoc.metadata?.recipientPhone,
       items: previewDoc.metadata?.description ? [
@@ -1084,11 +1102,53 @@ export const UserDashboard: React.FC = () => {
           unitPrice: previewDoc.metadata.amount || 0,
           total: previewDoc.metadata.amount || 0
         }
-      ] : [],
+      ] : [
+        {
+          description: previewDoc.name || 'Servicios / Bienes',
+          quantity: 1,
+          unitPrice: previewDoc.metadata?.amount || 0,
+          total: previewDoc.metadata?.amount || 0
+        }
+      ],
       total: previewDoc.metadata?.amount || 0,
       currency: 'PEN'
     };
-  }, [previewDoc, selectedCompany]);
+  }, [previewDoc, selectedCompany, currentUser]);
+
+  const handleDownloadPreviewPdf = async () => {
+    if (!previewDoc) return;
+
+    // Si el documento ya cuenta con URL de PDF directa
+    if (previewDoc.pdfUrl) {
+      window.open(previewDoc.pdfUrl, '_blank');
+      return;
+    }
+
+    // Si el fileUrl es un PDF en Base64
+    if (previewDoc.fileUrl && (previewDoc.mimeType?.includes('pdf') || previewDoc.fileUrl.startsWith('data:application/pdf') || previewDoc.fileUrl.endsWith('.pdf'))) {
+      downloadFile(previewDoc.fileUrl, `${previewDoc.name}.pdf`, 'application/pdf', true);
+      return;
+    }
+
+    // Generar PDF desde la plantilla HTML de InvoicePreview
+    const el = waPdfRef.current;
+    if (!el) {
+      alert('Vista previa no disponible para generar PDF');
+      return;
+    }
+
+    setIsGeneratingPreviewPdf(true);
+    try {
+      const filename = `${previewDoc.name || 'comprobante'}.pdf`;
+      const pdfBlob = await generarPdfDesdeElemento(el, { filename });
+      descargarBlob(pdfBlob, filename);
+    } catch (err: any) {
+      console.error('Error al generar PDF:', err);
+      alert('No se pudo generar el PDF del comprobante');
+    } finally {
+      setIsGeneratingPreviewPdf(false);
+    }
+  };
 
   const enviarWhatsAppPreview = async () => {
     if (!previewDoc) return;
@@ -1316,9 +1376,12 @@ export const UserDashboard: React.FC = () => {
                              <button onClick={() => setShowOrdenPagoModal(true)} className="flex-1 sm:flex-none bg-violet-600 hover:bg-violet-700 text-white px-3 py-2 rounded-xl transition flex items-center justify-center font-black text-[9px] uppercase tracking-wider active:scale-95 shadow-md shadow-violet-600/20" title="Orden de Pago / Solicitud de Cobro Interna (No SUNAT)">
                                <CreditCard className="w-3.5 h-3.5 mr-1" /> ORDEN DE PAGO
                              </button>
-                             <button onClick={() => setShowNotaVentaModal(true)} className="flex-1 sm:flex-none bg-teal-500 hover:bg-teal-600 text-slate-950 px-3 py-2 rounded-xl transition flex items-center justify-center font-black text-[9px] uppercase tracking-wider active:scale-95 shadow-md shadow-teal-500/20" title="Nota de Venta Interna (No SUNAT)">
-                               <FileText className="w-3.5 h-3.5 mr-1" /> NOTA DE VENTA
-                             </button>
+                              <button onClick={() => setShowNotaVentaModal(true)} className="flex-1 sm:flex-none bg-teal-500 hover:bg-teal-600 text-slate-950 px-3 py-2 rounded-xl transition flex items-center justify-center font-black text-[9px] uppercase tracking-wider active:scale-95 shadow-md shadow-teal-500/20" title="Nota de Venta Interna (No SUNAT)">
+                                <FileText className="w-3.5 h-3.5 mr-1" /> NOTA DE VENTA
+                              </button>
+                              <button onClick={() => setShowSireModal(true)} className="flex-1 sm:flex-none bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-2 rounded-xl transition flex items-center justify-center font-black text-[9px] uppercase tracking-wider active:scale-95 shadow-md shadow-indigo-500/20" title="SIRE — Registro de Ventas (RVIE) y Registro de Compras (RCE) Electrónicos">
+                                <FileSpreadsheet className="w-3.5 h-3.5 mr-1" /> SIRE (RVIE / RCE)
+                              </button>
                   </div>
                </div>
 
@@ -2045,18 +2108,23 @@ export const UserDashboard: React.FC = () => {
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="font-black text-slate-900 text-xs uppercase truncate">{item.description}</p>
-                          <div className="flex items-center space-x-2 mt-0.5">
+                          <div className="flex items-center space-x-2 mt-0.5 flex-wrap gap-y-1">
                             <p className="text-[9px] text-slate-400 font-bold uppercase">{item.date}</p>
                             <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${
                               isIngreso ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
                             }`}>
                               {isIngreso ? 'Venta / Ingreso' : 'Compra / Egreso'}
                             </span>
+                            {item.category && (
+                              <span className="text-[8px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-md">
+                                {item.category}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
                       <p className={`font-black text-xs shrink-0 pl-2 ${isIngreso ? 'text-green-700 font-extrabold' : 'text-slate-900'}`}>
-                        {isIngreso ? `+ S/ ${item.amount.toFixed(2)}` : `S/ ${item.amount.toFixed(2)}`}
+                        {isIngreso ? `+ S/ ${item.amount.toFixed(2)}` : `${item.currency === 'USD' ? '$' : 'S/'} ${item.amount.toFixed(2)}`}
                       </p>
                     </div>
                   );
@@ -2149,8 +2217,29 @@ export const UserDashboard: React.FC = () => {
                 <div key={inv.id} className="px-3 py-3 rounded-xl border border-amber-100 bg-amber-50/30 flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-white border border-amber-200 shrink-0"><Clock className="w-4 h-4 text-amber-600"/></div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-black text-gray-900 truncate uppercase tracking-tighter leading-none">{inv.serie}-{String(inv.correlative).padStart(8, '0')}</p>
-                    <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">{inv.customerName} · S/ {inv.amount.toFixed(2)}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={`text-[7px] px-1.5 py-0.5 rounded font-black uppercase tracking-wider ${
+                        inv.documentType === 'factura' || inv.serie?.startsWith('F') ? 'bg-blue-100 text-blue-700' :
+                        inv.documentType === 'boleta' || inv.serie?.startsWith('B') ? 'bg-emerald-100 text-emerald-700' :
+                        inv.documentType === 'nota_credito' ? 'bg-rose-100 text-rose-700' :
+                        inv.documentType === 'nota_debito' ? 'bg-orange-100 text-orange-700' :
+                        inv.documentType === 'liquidacion_compra' || inv.serie?.startsWith('E') ? 'bg-purple-100 text-purple-700' :
+                        inv.documentType === 'guia_remision' || inv.serie?.startsWith('T') ? 'bg-teal-100 text-teal-700' :
+                        inv.documentType === 'guia_transportista' || inv.serie?.startsWith('V') ? 'bg-indigo-100 text-indigo-700' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {inv.documentType === 'factura' ? 'FACTURA' :
+                         inv.documentType === 'boleta' ? 'BOLETA' :
+                         inv.documentType === 'nota_credito' ? 'N. CRÉDITO' :
+                         inv.documentType === 'nota_debito' ? 'N. DÉBITO' :
+                         inv.documentType === 'liquidacion_compra' ? 'LIQ. COMPRA' :
+                         inv.documentType === 'guia_remision' ? 'GUÍA REMIT.' :
+                         inv.documentType === 'guia_transportista' ? 'GUÍA TRANSP.' :
+                         'DOC'}
+                      </span>
+                      <p className="text-[11px] font-black text-gray-900 truncate uppercase tracking-tighter leading-none">{inv.serie}-{String(inv.correlative).padStart(8, '0')}</p>
+                    </div>
+                    <p className="text-[8px] font-bold text-gray-400 uppercase mt-0.5">{inv.customerName} {inv.amount > 0 ? `· S/ ${inv.amount.toFixed(2)}` : ''}</p>
                     {inv.customerPhone && (
                       <p className="text-[7px] font-bold text-amber-700 flex items-center gap-1 mt-0.5">
                         <Smartphone className="w-3 h-3" /> {inv.customerPhone}
@@ -2412,57 +2501,64 @@ export const UserDashboard: React.FC = () => {
                        )}
                     </div>
                  </div>
-                 <div className="p-6 border-t flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3 justify-center bg-gray-50">
-              {/* Descarga de archivo subido por el contador (fileUrl es Base64) */}
-              {previewDoc.uploadedBy === 'ACCOUNTANT' && previewDoc.fileUrl && (
-                <button
-                  onClick={() => downloadFile(previewDoc.fileUrl, previewDoc.name, previewDoc.mimeType || 'application/octet-stream', true)}
-                  className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-blue-700 transition flex items-center justify-center"
-                >
-                  <Download className="w-4 h-4 mr-2"/> Descargar Archivo
-                </button>
-              )}
-              {previewDoc.pdfUrl && (
-                <a href={previewDoc.pdfUrl} target="_blank" rel="noopener noreferrer" className="px-10 py-4 bg-brand-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-brand-700 transition flex items-center justify-center">
-                  <Download className="w-4 h-4 mr-2"/> Descargar PDF
-                </a>
-              )}
-              {(previewDoc.xmlUrl || previewDoc.xmlContent) && (
-                <button 
-                  onClick={() => downloadFile(previewDoc.xmlContent || '', `${previewDoc.name}.xml`, 'text/xml')}
-                  className="px-6 py-4 bg-white border-2 border-brand-100 text-brand-600 rounded-2xl font-black text-[10px] uppercase hover:bg-brand-50 transition flex items-center justify-center"
-                >
-                  <DownloadCloud className="w-4 h-4 mr-2"/> XML
-                </button>
-              )}
-              {(previewDoc.cdrUrl || previewDoc.cdrBase64) && (
-                <button 
-                  onClick={() => downloadFile(previewDoc.cdrBase64 || '', `R-${previewDoc.name}.zip`, 'application/zip', true)}
-                  className="px-6 py-4 bg-white border-2 border-green-100 text-green-600 rounded-2xl font-black text-[10px] uppercase hover:bg-green-50 transition flex items-center justify-center"
-                >
-                  <DownloadCloud className="w-4 h-4 mr-2"/> CDR (Respuesta)
-                </button>
-              )}
-              {previewDoc.metadata?.recipientPhone && esCelularValido(previewDoc.metadata.recipientPhone) && (
-                <button onClick={enviarWhatsAppPreview} disabled={waSending}
-                  className="px-6 py-4 bg-[#25D366] text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-[#1fb858] transition flex items-center justify-center disabled:opacity-60">
-                  {waSending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-                  {waSending ? 'Generando...' : 'Enviar por WhatsApp'}
-                </button>
-              )}
-              {previewDoc.sunatStatus === 'INTERNO' && (
-                <button
-                  onClick={() => transmitirNotaVentaASunat(previewDoc)}
-                  disabled={isTransmittingSunat}
-                  className="px-6 py-4 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 rounded-2xl font-black text-[10px] uppercase shadow-lg transition flex items-center justify-center gap-1.5"
-                  title="Emitir automáticamente como Factura o Boleta oficial SUNAT"
-                >
-                  {isTransmittingSunat ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 fill-current" />}
-                  ⚡ CLIENTE PAGÓ — TRANSMITIR A SUNAT
-                </button>
-              )}
-              <button onClick={() => setPreviewDoc(null)} className="px-10 py-4 bg-white border-2 border-gray-200 text-gray-600 rounded-2xl font-black text-[10px] uppercase hover:bg-gray-100 transition">Cerrar</button>
-           </div>
+                  <div className="p-6 border-t flex flex-wrap gap-3 justify-center items-center bg-gray-50">
+               {/* Descarga de archivo subido por el contador (fileUrl es Base64) */}
+               {previewDoc.uploadedBy === 'ACCOUNTANT' && previewDoc.fileUrl && (
+                 <button
+                   onClick={() => downloadFile(previewDoc.fileUrl, previewDoc.name, previewDoc.mimeType || 'application/octet-stream', true)}
+                   className="px-6 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-blue-700 transition flex items-center justify-center cursor-pointer"
+                 >
+                   <Download className="w-4 h-4 mr-2"/> Descargar Archivo
+                 </button>
+               )}
+
+               {/* Botón Descargar PDF siempre disponible para cualquier comprobante */}
+               <button
+                 onClick={handleDownloadPreviewPdf}
+                 disabled={isGeneratingPreviewPdf}
+                 className="px-6 py-4 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-rose-500/20 transition flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+                 title="Descargar representación impresa en formato PDF"
+               >
+                 {isGeneratingPreviewPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                 <span>{isGeneratingPreviewPdf ? 'Generando PDF...' : 'Descargar PDF'}</span>
+               </button>
+
+               {(previewDoc.xmlUrl || previewDoc.xmlContent) && (
+                 <button 
+                   onClick={() => downloadFile(previewDoc.xmlContent || '', `${previewDoc.name}.xml`, 'text/xml')}
+                   className="px-6 py-4 bg-white border-2 border-brand-200 text-brand-700 rounded-2xl font-black text-[10px] uppercase hover:bg-brand-50 transition flex items-center justify-center cursor-pointer"
+                 >
+                   <DownloadCloud className="w-4 h-4 mr-2"/> XML
+                 </button>
+               )}
+               {(previewDoc.cdrUrl || previewDoc.cdrBase64) && (
+                 <button 
+                   onClick={() => downloadFile(previewDoc.cdrBase64 || '', `R-${previewDoc.name}.zip`, 'application/zip', true)}
+                   className="px-6 py-4 bg-white border-2 border-emerald-200 text-emerald-700 rounded-2xl font-black text-[10px] uppercase hover:bg-emerald-50 transition flex items-center justify-center cursor-pointer"
+                 >
+                   <DownloadCloud className="w-4 h-4 mr-2"/> CDR (Respuesta)
+                 </button>
+               )}
+               {previewDoc.metadata?.recipientPhone && esCelularValido(previewDoc.metadata.recipientPhone) && (
+                 <button onClick={enviarWhatsAppPreview} disabled={waSending}
+                   className="px-6 py-4 bg-[#25D366] text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-[#1fb858] transition flex items-center justify-center disabled:opacity-60 cursor-pointer">
+                   {waSending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
+                   {waSending ? 'Generando...' : 'Enviar por WhatsApp'}
+                 </button>
+               )}
+               {previewDoc.sunatStatus === 'INTERNO' && (
+                 <button
+                   onClick={() => transmitirNotaVentaASunat(previewDoc)}
+                   disabled={isTransmittingSunat}
+                   className="px-6 py-4 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 rounded-2xl font-black text-[10px] uppercase shadow-lg transition flex items-center justify-center gap-1.5 cursor-pointer"
+                   title="Emitir automáticamente como Factura o Boleta oficial SUNAT"
+                 >
+                   {isTransmittingSunat ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 fill-current" />}
+                   ⚡ CLIENTE PAGÓ — TRANSMITIR A SUNAT
+                 </button>
+               )}
+               <button onClick={() => setPreviewDoc(null)} className="px-8 py-4 bg-white border-2 border-gray-200 text-gray-600 rounded-2xl font-black text-[10px] uppercase hover:bg-gray-100 transition cursor-pointer">Cerrar</button>
+            </div>
            {waNote && (
              <div className="px-6 pb-6 -mt-2 bg-gray-50 text-center space-y-2">
                {waNote.status === 'error' ? (
@@ -2950,6 +3046,13 @@ export const UserDashboard: React.FC = () => {
       setShowInvoiceModal(true);
     }}
   />
+
+  {/* MODAL SIRE — REGISTROS ELECTRÓNICOS (RVIE / RCE) */}
+  <SireModule
+    isOpen={showSireModal}
+    onClose={() => setShowSireModal(false)}
+  />
+
 </div>
   );
 };

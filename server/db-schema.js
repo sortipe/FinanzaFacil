@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
   parent_id VARCHAR(50),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS companies (
   id VARCHAR(50) PRIMARY KEY,
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS companies (
   CONSTRAINT chk_serie_factura CHECK (serie_factura IS NULL OR serie_factura REGEXP '^F[0-9]{3}$'),
   CONSTRAINT chk_serie_boleta CHECK (serie_boleta IS NULL OR serie_boleta REGEXP '^B[0-9]{3}$'),
   FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS expenses (
   id VARCHAR(50) PRIMARY KEY,
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS tax_documents (
   id VARCHAR(50) PRIMARY KEY,
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS tax_documents (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS packages (
   id VARCHAR(50) PRIMARY KEY,
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS packages (
   limits JSON DEFAULT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   deleted_at DATETIME DEFAULT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS payment_methods (
   id VARCHAR(50) PRIMARY KEY,
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS payment_methods (
   qr_image LONGTEXT,
   is_active TINYINT(1) DEFAULT 1,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS subscription_history (
   id VARCHAR(50) PRIMARY KEY,
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS subscription_history (
   voucher_image LONGTEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS complaints (
   id VARCHAR(50) PRIMARY KEY,
@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS complaints (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS user_products (
   id VARCHAR(50) PRIMARY KEY,
@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS user_products (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS pending_invoices (
   id VARCHAR(50) PRIMARY KEY,
@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS pending_invoices (
   company_id VARCHAR(50) NOT NULL,
   serie VARCHAR(10),
   correlative INT,
-  document_type VARCHAR(20),
+  document_type VARCHAR(30),
   original_document_id VARCHAR(50),
   payload JSON,
   customer_doc_type VARCHAR(10),
@@ -177,17 +177,17 @@ CREATE TABLE IF NOT EXISTS pending_invoices (
   attempt_count INT DEFAULT 0,
   status VARCHAR(20) DEFAULT 'PENDIENTE',
   last_error TEXT,
-  CONSTRAINT chk_pi_serie CHECK (serie IS NULL OR serie REGEXP '^[FB][0-9]{3}$'),
+  CONSTRAINT chk_pi_serie CHECK (serie IS NULL OR serie REGEXP '^[FBETV][0-9]{3}$'),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS sunat_global_config (
   id INT PRIMARY KEY DEFAULT 1,
   sunat_token TEXT,
   sunat_api_url VARCHAR(255),
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS notifications (
   id VARCHAR(50) PRIMARY KEY,
@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   is_read TINYINT(1) DEFAULT 0,
   type VARCHAR(20) DEFAULT 'SYSTEM',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS correlativos (
   company_id VARCHAR(50) NOT NULL,
@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS correlativos (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (company_id, serie),
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS payment_alerts (
   id VARCHAR(50) PRIMARY KEY,
@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS payment_alerts (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS personal_expenses (
   id VARCHAR(50) PRIMARY KEY,
@@ -240,7 +240,48 @@ CREATE TABLE IF NOT EXISTS personal_expenses (
   notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS sire_registros (
+  id VARCHAR(50) PRIMARY KEY,
+  company_id VARCHAR(50) NOT NULL,
+  periodo VARCHAR(7) NOT NULL,
+  tipo VARCHAR(10) NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
+  total_registros INT DEFAULT 0,
+  base_imponible DECIMAL(12,2) DEFAULT 0.00,
+  igv DECIMAL(12,2) DEFAULT 0.00,
+  total DECIMAL(12,2) DEFAULT 0.00,
+  fecha_generacion VARCHAR(10),
+  fecha_aceptacion VARCHAR(10),
+  observaciones TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS sire_comprobantes (
+  id VARCHAR(50) PRIMARY KEY,
+  registro_id VARCHAR(50) NOT NULL,
+  company_id VARCHAR(50) NOT NULL,
+  periodo VARCHAR(7) NOT NULL,
+  tipo VARCHAR(10) NOT NULL,
+  tipo_comprobante VARCHAR(30),
+  serie VARCHAR(10),
+  numero VARCHAR(20),
+  fecha_emision VARCHAR(10),
+  ruc_emisor VARCHAR(11),
+  razon_social_emisor VARCHAR(255),
+  base_imponible DECIMAL(12,2) DEFAULT 0.00,
+  igv DECIMAL(12,2) DEFAULT 0.00,
+  total DECIMAL(12,2) DEFAULT 0.00,
+  moneda VARCHAR(10) DEFAULT 'PEN',
+  estado_cruce VARCHAR(30) DEFAULT 'COINCIDE',
+  origen VARCHAR(10) DEFAULT 'LOCAL',
+  tax_document_id VARCHAR(50),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (registro_id) REFERENCES sire_registros(id) ON DELETE CASCADE,
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 `;
 
 const ALTER_AND_MIGRATE = async () => {
@@ -274,6 +315,23 @@ const ALTER_AND_MIGRATE = async () => {
   // --- Add assigned_accountant_id to companies if not exists ---
   if (!(await columnExists('companies', 'assigned_accountant_id'))) {
     await db.query(`ALTER TABLE companies ADD COLUMN assigned_accountant_id VARCHAR(50)`).catch(() => {});
+  }
+  if (!(await columnExists('companies', 'sire_client_id'))) {
+    await db.query(`ALTER TABLE companies ADD COLUMN sire_client_id VARCHAR(255)`).catch(() => {});
+  }
+  if (!(await columnExists('companies', 'sire_client_secret'))) {
+    await db.query(`ALTER TABLE companies ADD COLUMN sire_client_secret VARCHAR(255)`).catch(() => {});
+  }
+
+  // --- Add serie columns for Liquidación, Guía Remitente, Guía Transportista ---
+  if (!(await columnExists('companies', 'serie_liquidacion'))) {
+    await db.query(`ALTER TABLE companies ADD COLUMN serie_liquidacion VARCHAR(10) DEFAULT 'E001'`).catch(() => {});
+  }
+  if (!(await columnExists('companies', 'serie_guia_remision'))) {
+    await db.query(`ALTER TABLE companies ADD COLUMN serie_guia_remision VARCHAR(10) DEFAULT 'T001'`).catch(() => {});
+  }
+  if (!(await columnExists('companies', 'serie_guia_transporte'))) {
+    await db.query(`ALTER TABLE companies ADD COLUMN serie_guia_transporte VARCHAR(10) DEFAULT 'V001'`).catch(() => {});
   }
 
   // --- Add parent_id to users if not exists (for sub-users) ---
@@ -406,6 +464,12 @@ const ALTER_AND_MIGRATE = async () => {
     await db.query("ALTER TABLE pending_invoices ADD COLUMN original_document_id VARCHAR(50)").catch(() => {});
   }
 
+  // Marca de tiempo del último intento (backoff del worker de reintentos en servidor)
+  if (!(await columnExists('pending_invoices', 'last_attempt_at'))) {
+    await db.query("ALTER TABLE pending_invoices ADD COLUMN last_attempt_at DATETIME NULL").catch(() => {});
+    await db.query("CREATE INDEX idx_pi_retry ON pending_invoices (status, attempt_count)").catch(() => {});
+  }
+
   // Add limits column to packages for subscription restrictions
   if (!(await columnExists('packages', 'limits'))) {
     await db.query("ALTER TABLE packages ADD COLUMN limits JSON DEFAULT NULL").catch(() => {});
@@ -468,7 +532,10 @@ const ALTER_AND_MIGRATE = async () => {
 
   await ensureCheck('companies', 'chk_serie_factura', "serie_factura IS NULL OR serie_factura REGEXP '^F[0-9]{3}$'");
   await ensureCheck('companies', 'chk_serie_boleta', "serie_boleta IS NULL OR serie_boleta REGEXP '^B[0-9]{3}$'");
-  await ensureCheck('pending_invoices', 'chk_pi_serie', "serie IS NULL OR serie REGEXP '^[FB][0-9]{3}$'");
+  await ensureCheck('companies', 'chk_serie_liquidacion', "serie_liquidacion IS NULL OR serie_liquidacion REGEXP '^E[0-9]{3}$'");
+  await ensureCheck('companies', 'chk_serie_guia_remision', "serie_guia_remision IS NULL OR serie_guia_remision REGEXP '^T[0-9]{3}$'");
+  await ensureCheck('companies', 'chk_serie_guia_transporte', "serie_guia_transporte IS NULL OR serie_guia_transporte REGEXP '^V[0-9]{3}$'");
+  await ensureCheck('pending_invoices', 'chk_pi_serie', "serie IS NULL OR serie REGEXP '^[FBETV][0-9]{3}$'");
   await ensureUniqueIndex('companies', 'uq_companies_ruc', 'ruc');
 
   const hardenCompanyId = async (table) => {

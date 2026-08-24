@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('./db');
 const { sendEmail } = require('./mailer');
+const sireApiService = require('./sire-api-service');
 
 // Helper: map DB snake_case row to frontend camelCase
 const mapRow = (row, fields) => {
@@ -27,9 +28,12 @@ const COMPANY_FIELDS = {
   id: 'id', owner_user_id: 'ownerUserId', name: 'name', ruc: 'ruc',
   business_name: 'businessName', tax_address: 'taxAddress', dni: 'dni',
   is_persona_natural: 'isPersonaNatural',
-  sol_user: 'solUser', sol_pass: 'solPass', sunat_token: 'sunatToken',
+  sol_user: 'solUser', sol_pass: 'solPass', sire_client_id: 'sireClientId', sire_client_secret: 'sireClientSecret',
+  sunat_token: 'sunatToken',
   sunat_api_url: 'sunatApiUrl', cert_base64: 'certBase64', cert_pass: 'certPass',
-  serie_factura: 'serieFactura', serie_boleta: 'serieBoleta', sunat_env: 'sunatEnv',
+  serie_factura: 'serieFactura', serie_boleta: 'serieBoleta',
+  serie_liquidacion: 'serieLiquidacion', serie_guia_remision: 'serieGuiaRemision', serie_guia_transporte: 'serieGuiaTransporte',
+  sunat_env: 'sunatEnv',
   assigned_accountant_id: 'assignedAccountantId',
   created_at: 'createdAt', updated_at: 'updatedAt'
 };
@@ -229,6 +233,21 @@ const PERSONAL_EXPENSE_FIELDS = {
 const NOTIFICATION_FIELDS = {
   id: 'id', user_id: 'userId', message: 'message', date: 'date',
   is_read: 'isRead', type: 'type', created_at: 'createdAt'
+};
+
+const SIRE_REGISTRO_FIELDS = {
+  id: 'id', company_id: 'companyId', periodo: 'periodo', tipo: 'tipo', estado: 'estado',
+  total_registros: 'totalRegistros', base_imponible: 'baseImponible', igv: 'igv', total: 'total',
+  fecha_generacion: 'fechaGeneracion', fecha_aceptacion: 'fechaAceptacion', observaciones: 'observaciones',
+  created_at: 'createdAt'
+};
+
+const SIRE_COMPROBANTE_FIELDS = {
+  id: 'id', registro_id: 'registroId', company_id: 'companyId', periodo: 'periodo', tipo: 'tipo',
+  tipo_comprobante: 'tipoComprobante', serie: 'serie', numero: 'numero', fecha_emision: 'fechaEmision',
+  ruc_emisor: 'rucEmisor', razon_social_emisor: 'razonSocialEmisor', base_imponible: 'baseImponible',
+  igv: 'igv', total: 'total', moneda: 'moneda', estado_cruce: 'estadoCruce', origen: 'origen',
+  tax_document_id: 'taxDocumentId', created_at: 'createdAt'
 };
 
 // --- USERS ---
@@ -719,11 +738,12 @@ router.post('/companies', async (req, res) => {
       }
     }
 
-    await db.query(`INSERT INTO companies (id, owner_user_id, name, ruc, business_name, tax_address, dni, is_persona_natural, sol_user, sol_pass, sunat_token, sunat_api_url, cert_base64, cert_pass, serie_factura, serie_boleta, sunat_env, assigned_accountant_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+    await db.query(`INSERT INTO companies (id, owner_user_id, name, ruc, business_name, tax_address, dni, is_persona_natural, sol_user, sol_pass, sunat_token, sunat_api_url, cert_base64, cert_pass, serie_factura, serie_boleta, serie_liquidacion, serie_guia_remision, serie_guia_transporte, sunat_env, assigned_accountant_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
       c.id, c.ownerUserId, c.name, c.ruc || null, c.businessName || null, c.taxAddress || null,
       c.dni || null, c.isPersonaNatural ? 1 : 0,
       c.solUser || null, c.solPass || null, c.sunatToken || null, c.sunatApiUrl || null,
       c.certBase64 || null, c.certPass || null, c.serieFactura || null, c.serieBoleta || null,
+      c.serieLiquidacion || 'E001', c.serieGuiaRemision || 'T001', c.serieGuiaTransporte || 'V001',
       c.sunatEnv || 'SANDBOX', c.assignedAccountantId || null
     ]);
     res.json({ success: true });
@@ -740,7 +760,9 @@ router.put('/companies/:id', async (req, res) => {
       dni: 'dni', isPersonaNatural: 'is_persona_natural',
       solUser: 'sol_user', solPass: 'sol_pass', sunatToken: 'sunat_token',
       sunatApiUrl: 'sunat_api_url', certBase64: 'cert_base64', certPass: 'cert_pass',
-      serieFactura: 'serie_factura', serieBoleta: 'serie_boleta', sunatEnv: 'sunat_env',
+      serieFactura: 'serie_factura', serieBoleta: 'serie_boleta',
+      serieLiquidacion: 'serie_liquidacion', serieGuiaRemision: 'serie_guia_remision', serieGuiaTransporte: 'serie_guia_transporte',
+      sunatEnv: 'sunat_env',
       assignedAccountantId: 'assigned_accountant_id'
     };
   for (const [key, col] of Object.entries(map)) {
@@ -847,18 +869,51 @@ function saveBase64ToDisk(base64Content, subDir, fileNamePrefix) {
 router.post('/expenses', async (req, res) => {
   try {
     const e = req.body;
-    const companySubDir = e.companyId || e.userId || 'general';
+    if (!e || !e.userId) {
+      return res.status(400).json({ error: 'Se requiere userId para registrar el gasto' });
+    }
 
+    // Verify company exists to avoid foreign key constraint error
+    let validCompanyId = null;
+    if (e.companyId && typeof e.companyId === 'string' && e.companyId.trim() !== '') {
+      const compCheck = await db.query('SELECT id FROM companies WHERE id = ?', [e.companyId.trim()]);
+      if (compCheck.length > 0) {
+        validCompanyId = e.companyId.trim();
+      }
+    }
+
+    const companySubDir = validCompanyId || e.userId || 'general';
     const internalUrl = saveBase64ToDisk(e.internalVoucherUrl, `${companySubDir}/vouchers`, 'voucher_int') || e.internalVoucherUrl || null;
     const accountantUrl = saveBase64ToDisk(e.accountantVoucherUrl, `${companySubDir}/vouchers`, 'voucher_acc') || e.accountantVoucherUrl || null;
+    const id = e.id || `exp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
-    await db.query(`INSERT INTO expenses (id, user_id, company_id, amount, currency, description, date, category, internal_voucher_url, accountant_voucher_url, invoice_number, ruc, subtotal, igv, is_private) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
-      e.id, e.userId, e.companyId || null, e.amount, e.currency || 'PEN', e.description || null, e.date || null,
-      e.category || null, internalUrl, accountantUrl,
+    await db.query(`
+      INSERT INTO expenses (id, user_id, company_id, amount, currency, description, date, category, internal_voucher_url, accountant_voucher_url, invoice_number, ruc, subtotal, igv, is_private)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON DUPLICATE KEY UPDATE
+        amount = VALUES(amount),
+        currency = VALUES(currency),
+        description = VALUES(description),
+        date = VALUES(date),
+        category = VALUES(category),
+        internal_voucher_url = COALESCE(VALUES(internal_voucher_url), internal_voucher_url),
+        accountant_voucher_url = COALESCE(VALUES(accountant_voucher_url), accountant_voucher_url),
+        invoice_number = VALUES(invoice_number),
+        ruc = VALUES(ruc),
+        subtotal = VALUES(subtotal),
+        igv = VALUES(igv),
+        is_private = VALUES(is_private)
+    `, [
+      id, e.userId, validCompanyId, parseFloat(e.amount) || 0, e.currency || 'PEN', e.description || '', e.date || new Date().toISOString().split('T')[0],
+      e.category || 'Otros Egresos No SUNAT', internalUrl, accountantUrl,
       e.invoiceNumber || null, e.ruc || null, e.subtotal || null, e.igv || null, e.isPrivate ? 1 : 0
     ]);
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+
+    res.json({ success: true, id });
+  } catch (e) {
+    console.error('Error inserting expense:', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.post('/expenses/batch', async (req, res) => {
@@ -870,20 +925,51 @@ router.post('/expenses/batch', async (req, res) => {
 
     const insertedIds = [];
     for (const e of expensesList) {
+      if (!e.userId) continue;
+
+      let validCompanyId = null;
+      if (e.companyId && typeof e.companyId === 'string' && e.companyId.trim() !== '') {
+        const compCheck = await db.query('SELECT id FROM companies WHERE id = ?', [e.companyId.trim()]);
+        if (compCheck.length > 0) {
+          validCompanyId = e.companyId.trim();
+        }
+      }
+
       const id = e.id || `exp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      const companySubDir = e.companyId || e.userId || 'general';
+      const companySubDir = validCompanyId || e.userId || 'general';
       const internalUrl = saveBase64ToDisk(e.internalVoucherUrl, `${companySubDir}/vouchers`, 'voucher_int') || e.internalVoucherUrl || null;
       const accountantUrl = saveBase64ToDisk(e.accountantVoucherUrl, `${companySubDir}/vouchers`, 'voucher_acc') || e.accountantVoucherUrl || null;
 
-      await db.query(
-        `INSERT INTO expenses (id, user_id, company_id, amount, currency, description, date, category, internal_voucher_url, accountant_voucher_url, invoice_number, ruc, subtotal, igv, is_private) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [id, e.userId, e.companyId || null, e.amount || 0, e.currency || 'PEN', e.description || '', e.date, internalUrl, accountantUrl, e.invoiceNumber || null, e.ruc || null, e.subtotal || null, e.igv || null, e.isPrivate ? 1 : 0]
-      );
+      await db.query(`
+        INSERT INTO expenses (id, user_id, company_id, amount, currency, description, date, category, internal_voucher_url, accountant_voucher_url, invoice_number, ruc, subtotal, igv, is_private)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE
+          amount = VALUES(amount),
+          currency = VALUES(currency),
+          description = VALUES(description),
+          date = VALUES(date),
+          category = VALUES(category),
+          internal_voucher_url = COALESCE(VALUES(internal_voucher_url), internal_voucher_url),
+          accountant_voucher_url = COALESCE(VALUES(accountant_voucher_url), accountant_voucher_url),
+          invoice_number = VALUES(invoice_number),
+          ruc = VALUES(ruc),
+          subtotal = VALUES(subtotal),
+          igv = VALUES(igv),
+          is_private = VALUES(is_private)
+      `, [
+        id, e.userId, validCompanyId, parseFloat(e.amount) || 0, e.currency || 'PEN', e.description || '', e.date || new Date().toISOString().split('T')[0],
+        e.category || 'Otros Egresos No SUNAT', internalUrl, accountantUrl,
+        e.invoiceNumber || null, e.ruc || null, e.subtotal || null, e.igv || null, e.isPrivate ? 1 : 0
+      ]);
+
       insertedIds.push(id);
     }
 
     res.json({ success: true, count: insertedIds.length, ids: insertedIds });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error('Error inserting batch expenses:', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.delete('/expenses/:id', async (req, res) => {
@@ -1366,7 +1452,7 @@ router.post('/pending-invoices', async (req, res) => {
     const inv = req.body;
     if (!inv || !inv.id || !inv.userId || !inv.companyId) return res.status(400).json({ error: 'id, userId y companyId son requeridos' });
     if (!validateSerie(inv.serie)) return res.status(400).json({ error: 'Serie inválida: debe ser F001-F999 (factura) o B001-B999 (boleta)' });
-    await db.query(`INSERT INTO pending_invoices (id, user_id, company_id, serie, correlative, document_type, original_document_id, payload, customer_doc_type, customer_doc_number, customer_name, amount, created_at, last_attempt, attempt_count, status, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    await db.query(`INSERT INTO pending_invoices (id, user_id, company_id, serie, correlative, document_type, original_document_id, payload, customer_doc_type, customer_doc_number, customer_name, amount, created_at, last_attempt, last_attempt_at, attempt_count, status, last_error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(),?,?,?)
       ON DUPLICATE KEY UPDATE
         user_id = VALUES(user_id),
         company_id = VALUES(company_id),
@@ -1401,6 +1487,7 @@ router.put('/pending-invoices/:id', async (req, res) => {
     const values = [];
     if (data.status !== undefined) { fields.push('status=?'); values.push(data.status); }
     if (data.lastAttempt !== undefined) { fields.push('last_attempt=?'); values.push(data.lastAttempt); }
+    if (data.lastAttemptAt !== undefined) { fields.push('last_attempt_at=?'); values.push(data.lastAttemptAt); }
     if (data.attemptCount !== undefined) { fields.push('attempt_count=?'); values.push(data.attemptCount); }
     if (data.lastError !== undefined) { fields.push('last_error=?'); values.push(data.lastError); }
     if (fields.length) {
@@ -1415,6 +1502,26 @@ router.delete('/pending-invoices/:id', async (req, res) => {
   try {
     await db.query('DELETE FROM pending_invoices WHERE id = ?', [req.params.id]);
     res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- WORKER DE REINTENTOS (control interno protegido) ---
+router.post('/internal/retry-run', async (req, res) => {
+  const secret = process.env.RETRY_SECRET || '';
+  if (!secret || req.get('x-retry-secret') !== secret) return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const retryWorker = require('./retry-worker');
+    const summary = await retryWorker.runCycle(true);
+    res.json({ success: true, summary });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/internal/retry-status', (req, res) => {
+  const secret = process.env.RETRY_SECRET || '';
+  if (!secret || req.get('x-retry-secret') !== secret) return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const retryWorker = require('./retry-worker');
+    res.json(retryWorker.getStatus());
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1604,5 +1711,322 @@ const numFields = (obj, fields) => {
   }
   return obj;
 };
+
+// ─── SIRE (Sistema Integrado de Registros Electrónicos) ───
+
+router.get('/sire/registros', async (req, res) => {
+  try {
+    const { companyId, periodo } = req.query;
+    let sql = 'SELECT * FROM sire_registros WHERE 1=1';
+    const params = [];
+    if (companyId) { sql += ' AND company_id = ?'; params.push(companyId); }
+    if (periodo) { sql += ' AND periodo = ?'; params.push(periodo); }
+    sql += ' ORDER BY periodo DESC, tipo ASC';
+    const rows = await db.query(sql, params);
+    res.json(rows.map(r => mapRow(r, SIRE_REGISTRO_FIELDS)));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/sire/comprobantes', async (req, res) => {
+  try {
+    const { companyId, periodo, tipo } = req.query;
+    let sql = 'SELECT * FROM sire_comprobantes WHERE company_id = ? AND periodo = ?';
+    const params = [companyId, periodo];
+    if (tipo) { sql += ' AND tipo = ?'; params.push(tipo); }
+    sql += ' ORDER BY fecha_emision DESC, serie ASC, numero ASC';
+    const rows = await db.query(sql, params);
+    res.json(rows.map(r => mapRow(r, SIRE_COMPROBANTE_FIELDS)));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/sire/generar', async (req, res) => {
+  try {
+    const { companyId, periodo, tipo } = req.body;
+    if (!companyId || !periodo || !tipo) return res.status(400).json({ error: 'companyId, periodo y tipo requeridos' });
+
+    const registroId = `SIRE-${tipo}-${periodo}-${companyId}-${Date.now()}`;
+    const fechaHoy = new Date().toISOString().split('T')[0];
+
+    const [year, month] = periodo.split('-').map(Number);
+    const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+    const endDate = `${year}-${String(month).padStart(2, '0')}-31`;
+
+    let docsSql, docsParams, docFields;
+    if (tipo === 'RVIE') {
+      docsSql = `SELECT * FROM tax_documents WHERE company_id = ? AND upload_date >= ? AND upload_date <= ? AND document_type IN ('factura','boleta','nota_credito','nota_debito','liquidacion_compra') ORDER BY upload_date`;
+      docsParams = [companyId, startDate, endDate];
+      docFields = TAXDOC_FIELDS;
+    } else {
+      docsSql = `SELECT * FROM expenses WHERE company_id = ? AND date >= ? AND date <= ? AND is_private = 0 ORDER BY date`;
+      docsParams = [companyId, startDate, endDate];
+      docFields = EXPENSE_FIELDS;
+    }
+
+    const docs = await db.query(docsSql, docsParams);
+
+    let totalBase = 0, totalIgv = 0, totalMonto = 0;
+    const comprobantes = [];
+
+    for (const doc of docs) {
+      const mapped = mapRow(doc, docFields);
+      let base = 0, igvVal = 0, tot = 0, serieVal = '', numVal = '', tipoComp = '', rucEmisor = '', razonSocial = '', fechaEm = '';
+
+      if (tipo === 'RVIE') {
+        const meta = typeof mapped.metadata === 'string' ? JSON.parse(mapped.metadata || '{}') : (mapped.metadata || {});
+        tot = meta.amount || meta.netAmount || 0;
+        igvVal = meta.retention || 0;
+        base = tot - igvVal;
+        const parts = (mapped.id || '').split('-');
+        serieVal = parts[0] || '';
+        numVal = parts.slice(1).join('-') || '';
+        tipoComp = mapped.documentType || 'factura';
+        const company = await db.query('SELECT ruc, business_name FROM companies WHERE id = ?', [companyId]);
+        rucEmisor = company[0]?.ruc || '';
+        razonSocial = company[0]?.business_name || '';
+        fechaEm = mapped.uploadDate || fechaHoy;
+      } else {
+        tot = Number(mapped.amount) || 0;
+        igvVal = Number(mapped.igv) || 0;
+        base = Number(mapped.subtotal) || (tot - igvVal);
+        serieVal = '';
+        numVal = mapped.invoiceNumber || '';
+        tipoComp = 'compra';
+        rucEmisor = mapped.ruc || '';
+        razonSocial = mapped.description || '';
+        fechaEm = mapped.date || fechaHoy;
+      }
+
+      totalBase += base;
+      totalIgv += igvVal;
+      totalMonto += tot;
+
+      const compId = `SC-${registroId}-${comprobantes.length + 1}`;
+      comprobantes.push({
+        id: compId,
+        registroId,
+        companyId,
+        periodo,
+        tipo,
+        tipoComprobante: tipoComp,
+        serie: serieVal,
+        numero: numVal,
+        fechaEmision: fechaEm,
+        rucEmisor,
+        razonSocialEmisor: razonSocial,
+        baseImponible: base,
+        igv: igvVal,
+        total: tot,
+        moneda: 'PEN',
+        estadoCruce: 'COINCIDE',
+        origen: 'LOCAL',
+        taxDocumentId: tipo === 'RVIE' ? mapped.id : null,
+      });
+    }
+
+    // Clean up any existing records for this company, period & type first
+    const existing = await db.query('SELECT id FROM sire_registros WHERE company_id = ? AND periodo = ? AND tipo = ?', [companyId, periodo, tipo]);
+    for (const ex of existing) {
+      await db.query('DELETE FROM sire_comprobantes WHERE registro_id = ?', [ex.id]);
+    }
+    await db.query('DELETE FROM sire_registros WHERE company_id = ? AND periodo = ? AND tipo = ?', [companyId, periodo, tipo]);
+
+    await db.query(
+      `INSERT INTO sire_registros (id, company_id, periodo, tipo, estado, total_registros, base_imponible, igv, total, fecha_generacion) VALUES (?, ?, ?, ?, 'GENERADO', ?, ?, ?, ?, ?)`,
+      [registroId, companyId, periodo, tipo, comprobantes.length, totalBase.toFixed(2), totalIgv.toFixed(2), totalMonto.toFixed(2), fechaHoy]
+    );
+
+    for (const c of comprobantes) {
+      await db.query(
+        `INSERT INTO sire_comprobantes (id, registro_id, company_id, periodo, tipo, tipo_comprobante, serie, numero, fecha_emision, ruc_emisor, razon_social_emisor, base_imponible, igv, total, moneda, estado_cruce, origen, tax_document_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [c.id, c.registroId, c.companyId, c.periodo, c.tipo, c.tipoComprobante, c.serie, c.numero, c.fechaEmision, c.rucEmisor, c.razonSocialEmisor, c.baseImponible.toFixed(2), c.igv.toFixed(2), c.total.toFixed(2), c.moneda, c.estadoCruce, c.origen, c.taxDocumentId]
+      );
+    }
+
+    res.json({
+      success: true,
+      registro: mapRow({ id: registroId, company_id: companyId, periodo, tipo, estado: 'GENERADO', total_registros: comprobantes.length, base_imponible: totalBase, igv: totalIgv, total: totalMonto, fecha_generacion: fechaHoy }, SIRE_REGISTRO_FIELDS),
+      comprobantes: comprobantes.length,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/sire/aceptar', async (req, res) => {
+  try {
+    const { companyId, periodo, tipo } = req.body;
+    const fechaHoy = new Date().toISOString().split('T')[0];
+    const result = await db.query(
+      `UPDATE sire_registros SET estado = 'ACEPTADO', fecha_aceptacion = ? WHERE company_id = ? AND periodo = ? AND tipo = ?`,
+      [fechaHoy, companyId, periodo, tipo]
+    );
+    res.json({ success: true, updated: result.affectedRows || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/sire/exportar-txt', async (req, res) => {
+  try {
+    const { companyId, periodo, tipo } = req.query;
+    const rows = await db.query(
+      'SELECT * FROM sire_comprobantes WHERE company_id = ? AND periodo = ? AND tipo = ? ORDER BY fecha_emision',
+      [companyId, periodo, tipo]
+    );
+
+    const company = await db.query('SELECT ruc, business_name FROM companies WHERE id = ?', [companyId]);
+    const ruc = company[0]?.ruc || '00000000000';
+
+    const header = tipo === 'RVIE'
+      ? 'PERIODO|CUO|CORRELATIVO|FECHA_EMISION|FECHA_VTO|TIPO_CDP|SERIE|NUMERO|TIPO_DOC_CLIENTE|NRO_DOC_CLIENTE|RAZON_SOCIAL|BASE_IMPONIBLE|IGV|TOTAL|MONEDA|TIPO_CAMBIO|ESTADO'
+      : 'PERIODO|CUO|CORRELATIVO|FECHA_EMISION|FECHA_VTO|TIPO_CDP|SERIE|NUMERO|TIPO_DOC_PROVEEDOR|NRO_DOC_PROVEEDOR|RAZON_SOCIAL|BASE_IMPONIBLE|IGV|TOTAL|MONEDA|TIPO_CAMBIO|ESTADO';
+
+    let lines = [header];
+    rows.forEach((row, idx) => {
+      const r = mapRow(row, SIRE_COMPROBANTE_FIELDS);
+      const tipoMap = { factura: '01', boleta: '03', nota_credito: '07', nota_debito: '08', liquidacion_compra: '04', compra: '01' };
+      const tipoCdp = tipoMap[r.tipoComprobante] || '01';
+      lines.push(
+        `${r.periodo}|M${String(idx + 1).padStart(4, '0')}|${idx + 1}|${r.fechaEmision}||${tipoCdp}|${r.serie}|${r.numero}|6|${r.rucEmisor}|${r.razonSocialEmisor}|${Number(r.baseImponible).toFixed(2)}|${Number(r.igv).toFixed(2)}|${Number(r.total).toFixed(2)}|${r.moneda || 'PEN'}|1.000|1`
+      );
+    });
+
+    const content = lines.join('\n');
+    const filename = `LE${ruc}${periodo.replace('-', '')}00${tipo === 'RVIE' ? '140100' : '080100'}00111.txt`;
+
+    res.json({ success: true, filename, content, totalRegistros: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── ENDPOINTS CONEXIÓN DIRECTA API OAUTH2 SUNAT SIRE ───
+
+router.post('/sire/sunat/conectar', async (req, res) => {
+  try {
+    const { companyId } = req.body;
+    if (!companyId) return res.status(400).json({ error: 'companyId es requerido' });
+
+    const companyRows = await db.query('SELECT * FROM companies WHERE id = ?', [companyId]);
+    if (!companyRows.length) return res.status(404).json({ error: 'Empresa no encontrada' });
+
+    const company = mapRow(companyRows[0], COMPANY_FIELDS);
+    const tokenObj = await sireApiService.getSireOAuth2Token(company);
+
+    res.json({
+      success: true,
+      isDemoMode: !!tokenObj.isDemoMode,
+      message: tokenObj.isDemoMode
+        ? 'Modo Demo Activo (Ingresa un Client ID y Client Secret en "Credenciales API" para conectar a producción SUNAT).'
+        : '✓ Conexión OAuth2 Producción SUNAT SIRE verificada exitosamente.',
+      tokenType: tokenObj.tokenType,
+      expiresIn: tokenObj.expiresIn,
+    });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+router.post('/sire/sunat/propuesta', async (req, res) => {
+  try {
+    const { companyId, periodo, tipo } = req.body;
+    if (!companyId || !periodo || !tipo) return res.status(400).json({ error: 'companyId, periodo y tipo requeridos' });
+
+    const companyRows = await db.query('SELECT * FROM companies WHERE id = ?', [companyId]);
+    if (!companyRows.length) return res.status(404).json({ error: 'Empresa no encontrada' });
+    const company = mapRow(companyRows[0], COMPANY_FIELDS);
+
+    const sunatRes = await sireApiService.fetchPropuestaSunat(company, periodo, tipo);
+    const rawItems = Array.isArray(sunatRes.data) ? sunatRes.data : (sunatRes.data?.items || []);
+
+    const registroId = `SIRE-${tipo}-${periodo}-${companyId}-${Date.now()}`;
+    const fechaHoy = new Date().toISOString().split('T')[0];
+
+    // Limpiamos registros anteriores
+    const existing = await db.query('SELECT id FROM sire_registros WHERE company_id = ? AND periodo = ? AND tipo = ?', [companyId, periodo, tipo]);
+    for (const ex of existing) {
+      await db.query('DELETE FROM sire_comprobantes WHERE registro_id = ?', [ex.id]);
+    }
+    await db.query('DELETE FROM sire_registros WHERE company_id = ? AND periodo = ? AND tipo = ?', [companyId, periodo, tipo]);
+
+    let totalBase = 0, totalIgv = 0, totalMonto = 0;
+    const comprobantes = [];
+
+    // Mapeamos los items devueltos por SUNAT
+    rawItems.forEach((item, idx) => {
+      const base = Number(item.mtoValBib || item.baseImponible || item.mtoBase || 0);
+      const igvVal = Number(item.mtoIgv || item.igv || 0);
+      const tot = Number(item.mtoTotal || item.total || (base + igvVal));
+
+      totalBase += base;
+      totalIgv += igvVal;
+      totalMonto += tot;
+
+      comprobantes.push({
+        id: `SC-${registroId}-${idx + 1}`,
+        registroId,
+        companyId,
+        periodo,
+        tipo,
+        tipoComprobante: item.codCar || item.tipoDoc || '01',
+        serie: item.numSerie || item.serie || '',
+        numero: item.numDoc || item.numero || '',
+        fechaEmision: item.fecEmision || item.fechaEmision || fechaHoy,
+        rucEmisor: item.numDocIdentidad || item.numRuc || item.ruc || '',
+        razonSocialEmisor: item.nomRazonSocial || item.razonSocial || 'PROVEEDOR SUNAT',
+        baseImponible: base,
+        igv: igvVal,
+        total: tot,
+        moneda: item.codMoneda || 'PEN',
+        estadoCruce: 'COINCIDE',
+        origen: 'SUNAT',
+      });
+    });
+
+    await db.query(
+      `INSERT INTO sire_registros (id, company_id, periodo, tipo, estado, total_registros, base_imponible, igv, total, fecha_generacion, observaciones) VALUES (?, ?, ?, ?, 'PROPUESTA', ?, ?, ?, ?, ?, 'PROPUESTA OFICIAL SUNAT OAUTH2')`,
+      [registroId, companyId, periodo, tipo, comprobantes.length, totalBase.toFixed(2), totalIgv.toFixed(2), totalMonto.toFixed(2), fechaHoy]
+    );
+
+    for (const c of comprobantes) {
+      await db.query(
+        `INSERT INTO sire_comprobantes (id, registro_id, company_id, periodo, tipo, tipo_comprobante, serie, numero, fecha_emision, ruc_emisor, razon_social_emisor, base_imponible, igv, total, moneda, estado_cruce, origen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [c.id, c.registroId, c.companyId, c.periodo, c.tipo, c.tipoComprobante, c.serie, c.numero, c.fechaEmision, c.rucEmisor, c.razonSocialEmisor, c.baseImponible.toFixed(2), c.igv.toFixed(2), c.total.toFixed(2), c.moneda, c.estadoCruce, c.origen]
+      );
+    }
+
+    res.json({
+      success: true,
+      isDemoMode: !!sunatRes.isDemoMode,
+      totalRegistros: comprobantes.length,
+      baseImponible: totalBase,
+      igv: totalIgv,
+      total: totalMonto,
+    });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+router.post('/sire/sunat/aceptar', async (req, res) => {
+  try {
+    const { companyId, periodo, tipo } = req.body;
+    if (!companyId || !periodo || !tipo) return res.status(400).json({ error: 'companyId, periodo y tipo requeridos' });
+
+    const companyRows = await db.query('SELECT * FROM companies WHERE id = ?', [companyId]);
+    if (!companyRows.length) return res.status(404).json({ error: 'Empresa no encontrada' });
+    const company = mapRow(companyRows[0], COMPANY_FIELDS);
+
+    const sunatRes = await sireApiService.aceptarPropuestaSunat(company, periodo, tipo);
+    const fechaHoy = new Date().toISOString().split('T')[0];
+
+    await db.query(
+      `UPDATE sire_registros SET estado = 'ACEPTADO', fecha_aceptacion = ?, observaciones = ? WHERE company_id = ? AND periodo = ? AND tipo = ?`,
+      [`Ticket SUNAT: ${sunatRes.ticket}`, fechaHoy, companyId, periodo, tipo]
+    );
+
+    res.json({
+      success: true,
+      ticket: sunatRes.ticket,
+      message: sunatRes.message,
+    });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
 
 module.exports = router;

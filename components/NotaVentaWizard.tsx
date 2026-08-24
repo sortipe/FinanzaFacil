@@ -78,6 +78,11 @@ export const NotaVentaWizard: React.FC<NotaVentaWizardProps> = ({
     return () => { isMounted = false; };
   }, [isOpen, selectedCompanyId, serie]);
 
+  // Calculations
+  const total = useMemo(() => {
+    return items.reduce((acc, i) => acc + (parseFloat(i.subtotal as any) || 0), 0);
+  }, [items]);
+
   if (!isOpen) return null;
 
   // Search Customer
@@ -113,11 +118,6 @@ export const NotaVentaWizard: React.FC<NotaVentaWizardProps> = ({
       setIsSearchingCustomer(false);
     }
   };
-
-  // Calculations
-  const total = useMemo(() => {
-    return items.reduce((acc, i) => acc + (parseFloat(i.subtotal as any) || 0), 0);
-  }, [items]);
 
   // Items Management
   const handleAddItem = () => {

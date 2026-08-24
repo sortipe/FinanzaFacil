@@ -124,3 +124,15 @@ export const fetchPersonalExpenses = (params?: { userId?: string }): Promise<any
 export const createPersonalExpense = (expense: any): Promise<any> => request('/personal-expenses', { method: 'POST', body: JSON.stringify(expense) });
 export const updatePersonalExpense = (id: string, expense: any): Promise<any> => request(`/personal-expenses/${id}`, { method: 'PUT', body: JSON.stringify(expense) });
 export const deletePersonalExpense = (id: string): Promise<any> => request(`/personal-expenses/${id}`, { method: 'DELETE' });
+
+// SIRE (Sistema Integrado de Registros Electrónicos)
+export const fetchSireRegistros = (companyId: string, periodo?: string): Promise<any> => request(`/sire/registros${buildQuery({ companyId, periodo })}`);
+export const fetchSireComprobantes = (companyId: string, periodo: string, tipo: string): Promise<any> => request(`/sire/comprobantes${buildQuery({ companyId, periodo, tipo })}`);
+export const generarSireLocal = (data: { companyId: string; periodo: string; tipo: string }): Promise<any> => request('/sire/generar', { method: 'POST', body: JSON.stringify(data) });
+export const aceptarSirePropuesta = (data: { companyId: string; periodo: string; tipo: string }): Promise<any> => request('/sire/aceptar', { method: 'POST', body: JSON.stringify(data) });
+export const exportarSireTxt = (companyId: string, periodo: string, tipo: string): Promise<any> => request(`/sire/exportar-txt${buildQuery({ companyId, periodo, tipo })}`);
+
+// SIRE Direct API SUNAT OAuth2
+export const conectarSireSunatOAuth2 = (companyId: string): Promise<any> => request('/sire/sunat/conectar', { method: 'POST', body: JSON.stringify({ companyId }) });
+export const consultarPropuestaSunatOAuth2 = (data: { companyId: string; periodo: string; tipo: string }): Promise<any> => request('/sire/sunat/propuesta', { method: 'POST', body: JSON.stringify(data) });
+export const aceptarPropuestaSunatOAuth2 = (data: { companyId: string; periodo: string; tipo: string }): Promise<any> => request('/sire/sunat/aceptar', { method: 'POST', body: JSON.stringify(data) });

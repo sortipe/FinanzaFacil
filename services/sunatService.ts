@@ -78,7 +78,7 @@ export const sunatService = {
       
       const payload = {
         invoiceData: {
-          id: `${serie}-${Math.floor(Math.random() * 100000)}`,
+          id: data.documentId || `${serie}-${Math.floor(Math.random() * 100000)}`,
           issueDate: data.date,
           customerRuc: data.recipientDocNumber,
           customerName: data.recipientName,
@@ -116,7 +116,11 @@ export const sunatService = {
             cdrBase64: result.cdrBase64
           };
         } else {
-          return { success: false, error: result.error };
+          let errMsj = result.error || 'Error al emitir a SUNAT';
+          if (errMsj.includes('Validation ZIP Filename error') || errMsj.includes('0151')) {
+            errMsj = `SUNAT rechazó la serie E001 para este RUC (Error 0151). Verifica en Clave SUNAT SOL que la empresa tenga autorizada la serie E001 y el perfil para emitir Liquidaciones de Compra Electrónicas (Tipo 04) en el Sistema del Contribuyente.`;
+          }
+          return { success: false, error: errMsj };
         }
       } else {
         return sunatService.emitirConApisunat(payload, token, apiUrl);
@@ -142,7 +146,7 @@ export const sunatService = {
       
       const payload = {
         invoiceData: {
-          id: `${serie}-${Math.floor(Math.random() * 100000)}`,
+          id: data.documentId || `${serie}-${Math.floor(Math.random() * 100000)}`,
           issueDate: data.date,
           customerRuc: data.recipientRuc,
           customerName: data.recipientName,
@@ -251,7 +255,7 @@ export const sunatService = {
           const base = apiUrl && !apiUrl.startsWith('/') ? apiUrl : '';
           const payload = {
               invoiceData: {
-                  id: `${serie || (data.recipientRuc?.length === 8 ? 'B001' : 'F001')}-${Math.floor(Math.random() * 100000)}`,
+                  id: data.documentId || `${serie || (data.recipientRuc?.length === 8 ? 'B001' : 'F001')}-${Math.floor(Math.random() * 100000)}`,
                   issueDate: data.date,
                   customerRuc: data.recipientRuc,
                   customerName: data.recipientName,
@@ -285,9 +289,13 @@ export const sunatService = {
                   xmlContent: result.xmlContent,
                   cdrBase64: result.cdrBase64
               };
-          } else {
-              return { success: false, error: result.error };
+        } else {
+          let errMsj = result.error || 'Error al emitir a SUNAT';
+          if (errMsj.includes('Validation ZIP Filename error') || errMsj.includes('0151')) {
+            errMsj = `SUNAT rechazó la serie E001 para este RUC (Error 0151). Verifica en Clave SUNAT SOL que la empresa tenga autorizada la serie E001 y el perfil para emitir Liquidaciones de Compra Electrónicas (Tipo 04) en el Sistema del Contribuyente.`;
           }
+          return { success: false, error: errMsj };
+        }
       } else {
           return sunatService.emitirConApisunat(data, token, apiUrl);
       }

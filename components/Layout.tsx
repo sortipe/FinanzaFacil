@@ -4,6 +4,8 @@ import { LogOut, Home, Users, DollarSign, Settings, FileText, Menu, X, User, Cam
 import { sunatService } from '../services/sunatService';
 import { fileToBase64 } from '../services/geminiService';
 import { formatImageUrl } from '../utils/imageUtils';
+import { evaluatePassword } from '../utils/passwordValidation';
+import { PasswordStrengthMeter } from './PasswordStrengthMeter';
 import { UserRole } from '../types';
 
 interface LayoutProps {
@@ -65,6 +67,9 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
   const [pwError, setPwError] = useState('');
   const [pwSuccess, setPwSuccess] = useState(false);
+  const [showCurrentPw, setShowCurrentPw] = useState(false);
+  const [showNextPw, setShowNextPw] = useState(false);
+  const [showConfirmPw, setShowConfirmPw] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -89,6 +94,9 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       setPwForm({ current: '', next: '', confirm: '' });
       setPwError('');
       setPwSuccess(false);
+      setShowCurrentPw(false);
+      setShowNextPw(false);
+      setShowConfirmPw(false);
     }
   }, [currentUser, showProfileModal]);
 
@@ -98,12 +106,26 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     e.preventDefault();
     if (!currentUser) return;
     setPwSuccess(false);
-    if (pwForm.next.length < 6) { setPwError('La nueva contraseña debe tener al menos 6 caracteres.'); return; }
-    if (pwForm.next !== pwForm.confirm) { setPwError('Las contraseñas no coinciden.'); return; }
+    setPwError('');
+
+    const pwdEval = evaluatePassword(pwForm.next, currentUser.email, currentUser.name);
+    if (!pwdEval.isValid) {
+      setPwError(`La nueva contraseña no cumple los requisitos: ${pwdEval.errors.join('. ')}.`);
+      return;
+    }
+
+    if (pwForm.next !== pwForm.confirm) {
+      setPwError('Las contraseñas no coinciden.');
+      return;
+    }
+
     if (changePassword(currentUser.id, pwForm.current, pwForm.next)) {
       setPwForm({ current: '', next: '', confirm: '' });
       setPwError('');
       setPwSuccess(true);
+      setShowCurrentPw(false);
+      setShowNextPw(false);
+      setShowConfirmPw(false);
     } else {
       setPwError('La contraseña actual es incorrecta.');
     }
@@ -392,40 +414,71 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                     <form onSubmit={handleChangePassword} className="space-y-4">
                       <div>
                         <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">Contraseña Actual</label>
-                        <input
-                          type="password"
-                          required
-                          placeholder="••••••••"
-                          className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
-                          value={pwForm.current}
-                          onChange={e => setPwForm({ ...pwForm, current: e.target.value })}
-                        />
+                        <div className="relative">
+                          <input
+                            type={showCurrentPw ? 'text' : 'password'}
+                            required
+                            placeholder="••••••••"
+                            className="w-full bg-white border-gray-200 border-2 p-3.5 pr-11 rounded-2xl text-sm font-mono font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
+                            value={pwForm.current}
+                            onChange={e => setPwForm({ ...pwForm, current: e.target.value })}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowCurrentPw(!showCurrentPw)}
+                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition"
+                          >
+                            {showCurrentPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
                       </div>
                       <div>
                         <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">Nueva Contraseña</label>
-                        <input
-                          type="password"
-                          required
-                          placeholder="Mínimo 6 caracteres"
-                          className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
-                          value={pwForm.next}
-                          onChange={e => setPwForm({ ...pwForm, next: e.target.value })}
-                        />
+                        <div className="relative">
+                          <input
+                            type={showNextPw ? 'text' : 'password'}
+                            required
+                            minLength={8}
+                            placeholder="Mínimo 8 caracteres"
+                            className="w-full bg-white border-gray-200 border-2 p-3.5 pr-11 rounded-2xl text-sm font-mono font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
+                            value={pwForm.next}
+                            onChange={e => setPwForm({ ...pwForm, next: e.target.value })}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowNextPw(!showNextPw)}
+                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition"
+                          >
+                            {showNextPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
+                        {pwForm.next.length > 0 && (
+                          <PasswordStrengthMeter analysis={evaluatePassword(pwForm.next, currentUser?.email, currentUser?.name)} />
+                        )}
                       </div>
                       <div>
                         <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1.5 ml-1">Confirmar Nueva Contraseña</label>
-                        <input
-                          type="password"
-                          required
-                          placeholder="••••••••"
-                          className="w-full bg-white border-gray-200 border-2 p-3.5 rounded-2xl text-sm font-mono font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
-                          value={pwForm.confirm}
-                          onChange={e => setPwForm({ ...pwForm, confirm: e.target.value })}
-                        />
+                        <div className="relative">
+                          <input
+                            type={showConfirmPw ? 'text' : 'password'}
+                            required
+                            placeholder="Repite la nueva clave"
+                            className="w-full bg-white border-gray-200 border-2 p-3.5 pr-11 rounded-2xl text-sm font-mono font-bold text-gray-900 focus:border-brand-500 outline-none transition-all placeholder:text-gray-300"
+                            value={pwForm.confirm}
+                            onChange={e => setPwForm({ ...pwForm, confirm: e.target.value })}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowConfirmPw(!showConfirmPw)}
+                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition"
+                          >
+                            {showConfirmPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
                       </div>
                       {pwError && (
                         <p className="text-[10px] font-black text-red-500 uppercase flex items-center">
-                          <AlertCircle className="w-3.5 h-3.5 mr-1.5" /> {pwError}
+                          <AlertCircle className="w-3.5 h-3.5 mr-1.5 shrink-0" /> {pwError}
                         </p>
                       )}
                       <button type="submit" className="w-full py-4 bg-brand-50 text-brand-700 border-2 border-brand-200 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-brand-100 transition active:scale-[0.98] flex items-center justify-center">

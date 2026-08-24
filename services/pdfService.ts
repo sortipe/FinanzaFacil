@@ -6,21 +6,14 @@ export interface PdfOptions {
 }
 
 export const generarPdfDesdeElemento = async (element: HTMLElement, opts: PdfOptions): Promise<Blob> => {
-  // Save current scroll position
-  const originalScrollX = window.scrollX || window.pageXOffset || 0;
-  const originalScrollY = window.scrollY || window.pageYOffset || 0;
-
-  // Temporarily scroll to (0,0) to prevent html2canvas scrollY offset clipping
-  window.scrollTo(0, 0);
-
-  // Create a temporary top-left fixed container attached directly to document.body
-  // This guarantees top: 0, left: 0 coordinates regardless of parent modal styling or page height
+  // Create an invisible off-screen background container attached directly to document.body
+  // Placing it at fixed (0,0) with negative z-index ensures html2canvas renders full geometry without flashing on screen
   const container = document.createElement('div');
   container.style.position = 'fixed';
   container.style.top = '0';
   container.style.left = '0';
   container.style.width = '800px';
-  container.style.zIndex = '999999';
+  container.style.zIndex = '-99999';
   container.style.background = '#ffffff';
   container.style.opacity = '1';
   container.style.visibility = 'visible';
@@ -85,8 +78,6 @@ export const generarPdfDesdeElemento = async (element: HTMLElement, opts: PdfOpt
     if (container.parentNode) {
       container.parentNode.removeChild(container);
     }
-    // Restore original scroll position
-    window.scrollTo(originalScrollX, originalScrollY);
   }
 };
 

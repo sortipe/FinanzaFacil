@@ -26,12 +26,17 @@ export interface Company {
   isPersonaNatural?: boolean;
   solUser?: string;
   solPass?: string;
+  sireClientId?: string;
+  sireClientSecret?: string;
   sunatToken?: string;
   sunatApiUrl?: string;
   certBase64?: string;
   certPass?: string;
   serieFactura?: string;
   serieBoleta?: string;
+  serieLiquidacion?: string;
+  serieGuiaRemision?: string;
+  serieGuiaTransporte?: string;
   sunatEnv?: 'SANDBOX' | 'PRODUCTION';
   assignedAccountantId?: string | null;
   createdAt?: string;
@@ -135,7 +140,7 @@ export interface PendingInvoice {
   companyId?: string;
   serie: string;
   correlative: number;
-  documentType: 'factura' | 'boleta' | 'nota_credito' | 'nota_debito';
+  documentType: 'factura' | 'boleta' | 'nota_credito' | 'nota_debito' | 'liquidacion_compra' | 'guia_remision' | 'guia_transportista';
   originalDocumentId?: string;
   payload: any;
   customerDocType: string;
@@ -145,6 +150,7 @@ export interface PendingInvoice {
   amount: number;
   createdAt: string;
   lastAttempt: string;
+  lastAttemptAt?: string;
   attemptCount: number;
   status: 'PENDIENTE' | 'ENVIANDO' | 'ACEPTADO' | 'RECHAZADO';
   lastError?: string;
@@ -263,6 +269,46 @@ export interface PaymentAlert {
   notes?: string;
   lastPaidDate?: string;
   createdAt?: string;
+}
+
+export type SireRegistroTipo = 'RVIE' | 'RCE';
+export type SireEstado = 'PROPUESTA' | 'ACEPTADO' | 'REEMPLAZADO' | 'PENDIENTE' | 'GENERADO';
+export type SireComprobanteEstado = 'COINCIDE' | 'FALTANTE_LOCAL' | 'FALTANTE_SUNAT' | 'DISCREPANCIA';
+
+export interface SireRegistro {
+  id: string;
+  companyId: string;
+  periodo: string;
+  tipo: SireRegistroTipo;
+  estado: SireEstado;
+  totalRegistros: number;
+  baseImponible: number;
+  igv: number;
+  total: number;
+  fechaGeneracion: string;
+  fechaAceptacion?: string;
+  observaciones?: string;
+}
+
+export interface SireComprobante {
+  id: string;
+  registroId: string;
+  companyId: string;
+  periodo: string;
+  tipo: SireRegistroTipo;
+  tipoComprobante: string;
+  serie: string;
+  numero: string;
+  fechaEmision: string;
+  rucEmisor: string;
+  razonSocialEmisor: string;
+  baseImponible: number;
+  igv: number;
+  total: number;
+  moneda: string;
+  estadoCruce: SireComprobanteEstado;
+  origen: 'SUNAT' | 'LOCAL';
+  taxDocumentId?: string;
 }
 
 export type PersonalExpenseCategory = 

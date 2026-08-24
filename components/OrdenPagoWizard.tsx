@@ -80,6 +80,11 @@ export const OrdenPagoWizard: React.FC<OrdenPagoWizardProps> = ({
     return () => { isMounted = false; };
   }, [isOpen, selectedCompanyId, serie]);
 
+  // Calculations
+  const total = useMemo(() => {
+    return items.reduce((acc, i) => acc + (parseFloat(i.subtotal as any) || 0), 0);
+  }, [items]);
+
   if (!isOpen) return null;
 
   // Search Customer
@@ -115,11 +120,6 @@ export const OrdenPagoWizard: React.FC<OrdenPagoWizardProps> = ({
       setIsSearchingCustomer(false);
     }
   };
-
-  // Calculations
-  const total = useMemo(() => {
-    return items.reduce((acc, i) => acc + (parseFloat(i.subtotal as any) || 0), 0);
-  }, [items]);
 
   // Items Management
   const handleAddItem = () => {

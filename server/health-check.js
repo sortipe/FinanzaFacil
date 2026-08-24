@@ -29,7 +29,7 @@ const HARDEN_CHECKS = [
   }
   console.log('CONTEOS:', JSON.stringify(counts));
 
-  const badSeries = await db.query(`SELECT COUNT(*) AS n FROM pending_invoices WHERE serie IS NOT NULL AND serie NOT REGEXP '^[FB][0-9]{3}$'`);
+  const badSeries = await db.query(`SELECT COUNT(*) AS n FROM pending_invoices WHERE serie IS NOT NULL AND serie NOT REGEXP '^[FBETV][0-9]{3}$'`);
   if (badSeries[0].n > 0) failures.push('pendings con serie inválida');
   console.log(`${badSeries[0].n === 0 ? 'OK ' : 'FALLA'} sin pendings con serie inválida`);
 

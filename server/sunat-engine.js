@@ -41,12 +41,16 @@ class SunatEngine {
         const todayDate = new Date().toISOString().split('T')[0];
         const issueDate = (data.issueDate || data.date || todayDate).toString().trim() || todayDate;
 
+        const docType = data.documentType || (data.id?.startsWith('B') ? '03' : data.id?.startsWith('E') ? '04' : data.id?.startsWith('T') ? '09' : data.id?.startsWith('V') ? '31' : '01');
+        const isLiquidacion = docType === '04' || data.id?.startsWith('E');
+        const operationListId = isLiquidacion ? '0200' : '0101';
+
         doc.ele('cbc:UBLVersionID').txt('2.1').up()
            .ele('cbc:CustomizationID').txt('2.0').up()
            .ele('cbc:ID').txt(data.id).up()
            .ele('cbc:IssueDate').txt(issueDate).up()
            .ele('cbc:IssueTime').txt(data.issueTime || '00:00:00').up()
-           .ele('cbc:InvoiceTypeCode', { listID: '0101' }).txt(data.documentType || (data.id?.startsWith('B') ? '03' : data.id?.startsWith('E') ? '04' : data.id?.startsWith('T') ? '09' : data.id?.startsWith('V') ? '31' : '01')).up()
+           .ele('cbc:InvoiceTypeCode', { listID: operationListId }).txt(docType).up()
            .ele('cbc:DocumentCurrencyCode').txt(data.currency || 'PEN').up();
 
         const invoice = doc;
@@ -66,7 +70,7 @@ class SunatEngine {
                         .ele('cbc:URI').txt('#SignatureSUNAT').up()
                     .up()
                 .up()
-            .up()
+            .up();
             
         const codEstablecimiento = String(this.config.codEstablecimiento && this.config.codEstablecimiento !== '0' ? this.config.codEstablecimiento : '0000').padStart(4, '0');
 

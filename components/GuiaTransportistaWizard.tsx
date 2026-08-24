@@ -3,7 +3,7 @@ import { useStore } from '../context/StoreContext';
 import { consultaService } from '../services/consultaService';
 import { sunatService } from '../services/sunatService';
 import { getNextCorrelative, allocateNextCorrelative } from '../src/services/api';
-import { InvoiceItem } from '../types';
+import { InvoiceItem, PendingInvoice } from '../types';
 import { 
   X, User, Search, Loader2, FileText, Calendar, Truck, MapPin, 
   CheckCircle2, AlertTriangle, Plus, Trash2, Eye, ArrowLeft, 
@@ -24,7 +24,7 @@ export const GuiaTransportistaWizard: React.FC<GuiaTransportistaWizardProps> = (
   onClose,
   onSuccess,
 }) => {
-  const { currentUser, selectedCompany, selectedCompanyId, sunatGlobalConfig, addTaxDocument } = useStore();
+  const { currentUser, selectedCompany, selectedCompanyId, sunatGlobalConfig, addTaxDocument, addPendingInvoice } = useStore();
 
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
 
@@ -50,7 +50,7 @@ export const GuiaTransportistaWizard: React.FC<GuiaTransportistaWizardProps> = (
   const [relatedDocNumber, setRelatedDocNumber] = useState(''); // e.g. T001-00000045 o F001-00000123
 
   // Series & Date
-  const [serie, setSerie] = useState('V001');
+  const [serie, setSerie] = useState(selectedCompany?.serieGuiaTransporte || 'V001');
   const [correlative, setCorrelative] = useState<number | ''>('');
   const [issueDate, setIssueDate] = useState(new Date().toISOString().split('T')[0]);
 
@@ -111,6 +111,29 @@ export const GuiaTransportistaWizard: React.FC<GuiaTransportistaWizardProps> = (
     })();
     return () => { isMounted = false; };
   }, [isOpen, selectedCompanyId, serie]);
+
+  // Preview Data
+  const previewData: InvoicePreviewData | null = useMemo(() => {
+    if (!emittedDoc) return null;
+    return {
+      id: emittedDoc.id,
+      documentType: '31',
+      issueDate: emittedDoc.issueDate,
+      emitterName: selectedCompany?.name || 'EMPRESA DE TRANSPORTES S.A.C.',
+      emitterRuc: selectedCompany?.ruc || '20601090001',
+      customerName: emittedDoc.customerName,
+      customerRuc: emittedDoc.customerRuc,
+      items: items.map((i) => ({
+        description: i.description,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        subtotal: i.subtotal,
+      })),
+      total: 0,
+      currency: 'PEN',
+      sunatStatus: 'ACEPTADO',
+    };
+  }, [emittedDoc, selectedCompany, items]);
 
   if (!isOpen) return null;
 
@@ -243,12 +266,12 @@ export const GuiaTransportistaWizard: React.FC<GuiaTransportistaWizardProps> = (
         return;
       }
     } else if (step === 3) {
-      if (!vehiclePlate) {
+      if (!vehiclePlate.trim()) {
         setErrorMessage('Debe ingresar la Placa Principal del Vehículo');
         return;
       }
-      if (!driverDni || !driverName) {
-        setErrorMessage('Debe ingresar el DNI y los Nombres completos del Chofer');
+      if (!driverLicense.trim()) {
+        setErrorMessage('Debe ingresar la Licencia de Conducir del Chofer');
         return;
       }
     } else if (step === 4) {
@@ -311,12 +334,66 @@ export const GuiaTransportistaWizard: React.FC<GuiaTransportistaWizardProps> = (
       };
 
       const userCredentials = {
-        ruc: selectedCompany?.ruc || sunatGlobalConfig?.demo_ruc || '20601090001',
-        user: selectedCompany?.sunatUser || sunatGlobalConfig?.demo_user || 'MODDATOS',
-        pass: selectedCompany?.sunatPass || sunatGlobalConfig?.demo_pass || 'moddatos',
-        env: sunatGlobalConfig?.environment || 'sandbox',
-        emitterName: selectedCompany?.name || 'EMPRESA DE TRANSPORTES S.A.C.',
+        ruc: selectedCompany?.ruc || currentUser?.ruc,
+        user: selectedCompany?.solUser || selectedCompany?.sunatUser,
+        pass: selectedCompany?.solPass || selectedCompany?.sunatPass,
+        certBase64: selectedCompany?.certBase64,
+        certPass: selectedCompany?.certPass,
+        env: selectedCompany?.sunatEnv || 'PRODUCTION',
+        emitterName: selectedCompany?.businessName || selectedCompany?.name || 'EMPRESA DE TRANSPORTES S.A.C.'
       };
+
+      const pendingPayload = {
+        invoiceData: {
+          id: docId,
+          documentType: '31',
+          issueDate,
+          senderRuc,
+          senderName,
+          customerRuc: recipientDocNumber,
+          customerName: recipientName,
+          customerType: recipientDocType || (recipientDocNumber?.length === 8 ? '1' : '6'),
+          payerRuc: payerType === 'sender' ? senderDocNumber : recipientDocNumber,
+          payerName: payerType === 'sender' ? senderName : recipientName,
+          emitterName: selectedCompany?.businessName || selectedCompany?.name || 'EMPRESA DE TRANSPORTES S.A.C.',
+          mtcRegistrationNumber,
+          items,
+          total: 0,
+          currency: 'PEN',
+          grossWeight: totalGrossWeight,
+          weightUnit,
+          packagesCount: packageCount,
+          originAddress,
+          destinationAddress,
+          vehiclePlate: vehiclePlate.toUpperCase(),
+          trailerPlate: trailerPlate ? trailerPlate.toUpperCase() : undefined,
+          driverLicense,
+          driverDni,
+          driverName,
+          docRefId: relatedDocNumber || undefined
+        },
+        credentials: userCredentials
+      };
+
+      const buildPendingTransportista = (errorMsg: string): PendingInvoice => ({
+        id: docId,
+        userId: currentUser?.id || '',
+        companyId: selectedCompanyId || '',
+        serie,
+        correlative: Number(finalNum) || 1,
+        documentType: 'guia_transportista',
+        payload: pendingPayload,
+        customerDocType: recipientDocType === '1' || recipientDocNumber?.length === 8 ? 'DNI' : 'RUC',
+        customerDocNumber: recipientDocNumber,
+        customerName: recipientName,
+        customerPhone: recipientPhone,
+        amount: 0,
+        createdAt: issueDate,
+        lastAttempt: new Date().toISOString().split('T')[0],
+        attemptCount: 0,
+        status: 'PENDIENTE',
+        lastError: errorMsg
+      });
 
       const res = await sunatService.emitirGuiaTransportista(
         payload,
@@ -330,7 +407,7 @@ export const GuiaTransportistaWizard: React.FC<GuiaTransportistaWizardProps> = (
         const newDoc: any = {
           id: docId,
           type: 'guia_transportista',
-          documentType: '31',
+          documentType: 'guia_transportista',
           serie,
           correlative: Number(finalNum),
           issueDate,
@@ -352,10 +429,18 @@ export const GuiaTransportistaWizard: React.FC<GuiaTransportistaWizardProps> = (
         setStep(6);
         if (onSuccess) onSuccess(newDoc);
       } else {
-        setErrorMessage(res.error || 'Error emitiendo Guía de Remisión Transportista ante SUNAT');
+        const errMsg = res.error || 'Error emitiendo Guía de Remisión Transportista ante SUNAT';
+        addPendingInvoice(buildPendingTransportista(errMsg));
+        setErrorMessage(`${errMsg}. Se guardó en "Pendientes SUNAT" para reintento automático.`);
       }
     } catch (err: any) {
-      setErrorMessage(err.message || 'Error de conexión con el motor SUNAT');
+      const errMsg = 'Error inesperado: ' + (err.message || 'Error de conexión con el motor SUNAT');
+      if (typeof docId !== 'undefined') {
+        try {
+          addPendingInvoice(buildPendingTransportista(errMsg));
+        } catch {}
+      }
+      setErrorMessage(`${errMsg}. Se guardó en "Pendientes SUNAT" para reintento automático.`);
     } finally {
       setIsEmitting(false);
     }
@@ -396,29 +481,6 @@ export const GuiaTransportistaWizard: React.FC<GuiaTransportistaWizardProps> = (
       setIsSendingWa(false);
     }
   };
-
-  // Preview Data
-  const previewData: InvoicePreviewData | null = useMemo(() => {
-    if (!emittedDoc) return null;
-    return {
-      id: emittedDoc.id,
-      documentType: '31',
-      issueDate: emittedDoc.issueDate,
-      emitterName: selectedCompany?.name || 'EMPRESA DE TRANSPORTES S.A.C.',
-      emitterRuc: selectedCompany?.ruc || '20601090001',
-      customerName: emittedDoc.customerName,
-      customerRuc: emittedDoc.customerRuc,
-      items: items.map((i) => ({
-        description: i.description,
-        quantity: i.quantity,
-        unitPrice: i.unitPrice,
-        subtotal: i.subtotal,
-      })),
-      total: 0,
-      currency: 'PEN',
-      sunatStatus: 'ACEPTADO',
-    };
-  }, [emittedDoc, selectedCompany, items]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto">

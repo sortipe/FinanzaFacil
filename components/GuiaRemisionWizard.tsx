@@ -3,7 +3,7 @@ import { useStore } from '../context/StoreContext';
 import { consultaService } from '../services/consultaService';
 import { sunatService } from '../services/sunatService';
 import { getNextCorrelative, allocateNextCorrelative } from '../src/services/api';
-import { InvoiceItem } from '../types';
+import { InvoiceItem, PendingInvoice } from '../types';
 import { 
   X, User, Search, Loader2, FileText, Calendar, Truck, MapPin, 
   CheckCircle2, AlertTriangle, Plus, Trash2, Eye, ArrowLeft, 
@@ -33,7 +33,7 @@ export const GuiaRemisionWizard: React.FC<GuiaRemisionWizardProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { currentUser, selectedCompany, selectedCompanyId, sunatGlobalConfig, addTaxDocument } = useStore();
+  const { currentUser, selectedCompany, selectedCompanyId, sunatGlobalConfig, addTaxDocument, addPendingInvoice } = useStore();
 
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
 
@@ -47,7 +47,7 @@ export const GuiaRemisionWizard: React.FC<GuiaRemisionWizardProps> = ({
   const [docSearchError, setDocSearchError] = useState('');
 
   // Series & Date
-  const [serie, setSerie] = useState('T001');
+  const [serie, setSerie] = useState(selectedCompany?.serieGuiaRemision || 'T001');
   const [correlative, setCorrelative] = useState<number | ''>('');
   const [issueDate, setIssueDate] = useState(new Date().toISOString().split('T')[0]);
 
@@ -192,6 +192,10 @@ export const GuiaRemisionWizard: React.FC<GuiaRemisionWizardProps> = ({
       setEmissionError('Debes especificar la dirección del Punto de Llegada (Destino).');
       return;
     }
+    if (!items.length || !items.some(i => i.description.trim())) {
+      setEmissionError('Debes agregar al menos un bien con descripción válida.');
+      return;
+    }
 
     setIsEmitting(true);
     try {
@@ -205,9 +209,10 @@ export const GuiaRemisionWizard: React.FC<GuiaRemisionWizardProps> = ({
 
       const formattedId = `${serie}-${String(finalCorr).padStart(8, '0')}`;
       const token = selectedCompany?.sunatToken || sunatGlobalConfig.sunatToken || '';
-      const apiUrl = selectedCompany?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || 'https://sandbox.apisunat.pe/api/v3';
+      const apiUrl = '';
 
       const payload = {
+        documentId: formattedId,
         date: issueDate,
         recipientDocType,
         recipientRuc: recipientDocNumber,
@@ -234,6 +239,65 @@ export const GuiaRemisionWizard: React.FC<GuiaRemisionWizardProps> = ({
         emitterName: selectedCompany?.businessName || selectedCompany?.name || currentUser?.name
       }, serie);
 
+      const pendingPayload = {
+        invoiceData: {
+          id: formattedId,
+          issueDate,
+          customerRuc: recipientDocNumber,
+          customerName: recipientName,
+          customerType: recipientDocType || (recipientDocNumber?.length === 8 ? '1' : '6'),
+          emitterName: selectedCompany?.businessName || selectedCompany?.name || currentUser?.name,
+          transferReason,
+          transportMode,
+          transferStartDate,
+          totalGrossWeight: parseFloat(totalGrossWeight) || 1,
+          weightUnit,
+          packageCount: parseInt(packageCount) || 1,
+          startAddress,
+          endAddress,
+          carrierRuc: transportMode === '01' ? carrierRuc : undefined,
+          carrierName: transportMode === '01' ? carrierName : undefined,
+          vehiclePlate: transportMode === '02' ? vehiclePlate : undefined,
+          driverDocNumber: transportMode === '02' ? driverDocNumber : undefined,
+          driverLicense: transportMode === '02' ? driverLicense : undefined,
+          driverName: transportMode === '02' ? driverName : undefined,
+          relatedDocNumber: relatedDocNumber.trim() || undefined,
+          items,
+          total: parseFloat(totalGrossWeight) || 0,
+          currency: 'PEN',
+          documentType: '09'
+        },
+        credentials: {
+          ruc: selectedCompany?.ruc || currentUser?.ruc,
+          user: selectedCompany?.solUser,
+          pass: selectedCompany?.solPass,
+          env: selectedCompany?.sunatEnv || 'PRODUCTION',
+          certBase64: selectedCompany?.certBase64,
+          certPass: selectedCompany?.certPass,
+          emitterName: selectedCompany?.businessName || selectedCompany?.name || currentUser?.name
+        }
+      };
+
+      const buildPendingGuia = (errorMsg: string): PendingInvoice => ({
+        id: formattedId,
+        userId: currentUser?.id || '',
+        companyId: selectedCompanyId || '',
+        serie,
+        correlative: Number(finalCorr) || 1,
+        documentType: 'guia_remision',
+        payload: pendingPayload,
+        customerDocType: recipientDocType === '1' || recipientDocNumber?.length === 8 ? 'DNI' : 'RUC',
+        customerDocNumber: recipientDocNumber,
+        customerName: recipientName,
+        customerPhone: recipientPhone,
+        amount: parseFloat(totalGrossWeight) || 0,
+        createdAt: issueDate,
+        lastAttempt: new Date().toISOString().split('T')[0],
+        attemptCount: 0,
+        status: 'PENDIENTE',
+        lastError: errorMsg
+      });
+
       if (resp.success) {
         const newDoc = {
           id: formattedId,
@@ -247,7 +311,7 @@ export const GuiaRemisionWizard: React.FC<GuiaRemisionWizardProps> = ({
           periodMonth: new Date(issueDate).toLocaleString('es-ES', { month: 'long' }),
           periodYear: new Date(issueDate).getFullYear(),
           sunatStatus: (resp.sunatStatus || 'ACEPTADO') as any,
-          documentType: 'factura' as any,
+          documentType: 'guia_remision' as any,
           uploadedBy: 'USER' as const,
           xmlContent: resp.xmlContent,
           cdrBase64: resp.cdrBase64,
@@ -266,10 +330,18 @@ export const GuiaRemisionWizard: React.FC<GuiaRemisionWizardProps> = ({
         setStep(6);
         if (onSuccess) onSuccess(newDoc);
       } else {
-        setEmissionError(resp.error || 'Error al emitir Guía de Remisión a SUNAT.');
+        const errMsg = resp.error || 'Error al emitir Guía de Remisión a SUNAT.';
+        addPendingInvoice(buildPendingGuia(errMsg));
+        setEmissionError(`${errMsg} Se guardó en "Pendientes SUNAT" para reintento automático.`);
       }
     } catch (err: any) {
-      setEmissionError('Error inesperado: ' + err.message);
+      const errMsg = 'Error inesperado: ' + (err.message || 'Desconocido');
+      if (typeof formattedId !== 'undefined') {
+        try {
+          addPendingInvoice(buildPendingGuia(errMsg));
+        } catch {}
+      }
+      setEmissionError(`${errMsg}. Se guardó en "Pendientes SUNAT" para reintento automático.`);
     } finally {
       setIsEmitting(false);
     }
@@ -514,7 +586,24 @@ export const GuiaRemisionWizard: React.FC<GuiaRemisionWizardProps> = ({
                 <ChevronLeft className="w-4 h-4" /> Anterior
               </button>
               <button
-                onClick={() => setStep(3)}
+                onClick={() => {
+                  if (!transferStartDate) {
+                    setEmissionError('Ingresa la fecha de inicio del traslado.');
+                    return;
+                  }
+                  const w = parseFloat(totalGrossWeight);
+                  if (!totalGrossWeight || isNaN(w) || w <= 0) {
+                    setEmissionError('Ingresa un peso bruto total válido (mayor a 0).');
+                    return;
+                  }
+                  const p = parseInt(packageCount, 10);
+                  if (!packageCount || isNaN(p) || p < 1) {
+                    setEmissionError('Ingresa la cantidad de bultos (mínimo 1).');
+                    return;
+                  }
+                  setEmissionError('');
+                  setStep(3);
+                }}
                 className="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white text-xs font-black uppercase tracking-wider rounded-2xl transition shadow-md flex items-center gap-1"
               >
                 <span>Siguiente: Ruta Origen/Destino</span> <ChevronRight className="w-4 h-4" />
@@ -666,7 +755,29 @@ export const GuiaRemisionWizard: React.FC<GuiaRemisionWizardProps> = ({
                 <ChevronLeft className="w-4 h-4" /> Anterior
               </button>
               <button
-                onClick={() => setStep(5)}
+                onClick={() => {
+                  if (transportMode === '02') {
+                    if (!vehiclePlate.trim()) {
+                      setEmissionError('Ingresa la placa del vehículo.');
+                      return;
+                    }
+                    if (!driverLicense.trim()) {
+                      setEmissionError('Ingresa la licencia de conducir del chofer.');
+                      return;
+                    }
+                  } else {
+                    if (!carrierRuc.trim()) {
+                      setEmissionError('Ingresa el RUC de la empresa de transportes.');
+                      return;
+                    }
+                    if (!carrierName.trim()) {
+                      setEmissionError('Ingresa la razón social del transportista.');
+                      return;
+                    }
+                  }
+                  setEmissionError('');
+                  setStep(5);
+                }}
                 className="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white text-xs font-black uppercase tracking-wider rounded-2xl transition shadow-md flex items-center gap-1"
               >
                 <span>Siguiente: Bienes</span> <ChevronRight className="w-4 h-4" />

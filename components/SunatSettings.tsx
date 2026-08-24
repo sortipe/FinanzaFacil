@@ -15,13 +15,21 @@ const getInitialFormData = (company: any) => {
         ruc: company?.ruc || '',
         solUser: company?.solUser || '',
         solPass: company?.solPass || '',
+        sireClientId: company?.sireClientId || '',
+        sireClientSecret: company?.sireClientSecret || '',
         emitterName: company?.businessName || '',
         certPass: company?.certPass || '',
         sunatEnv: company?.sunatEnv || 'SANDBOX',
         serieFactura: company?.serieFactura || 'F001',
         serieBoleta: company?.serieBoleta || 'B001',
+        serieLiquidacion: company?.serieLiquidacion || 'E001',
+        serieGuiaRemision: company?.serieGuiaRemision || 'T001',
+        serieGuiaTransporte: company?.serieGuiaTransporte || 'V001',
         correlativoFactura: getCorr(company?.id, company?.serieFactura || 'F001'),
-        correlativoBoleta: getCorr(company?.id, company?.serieBoleta || 'B001')
+        correlativoBoleta: getCorr(company?.id, company?.serieBoleta || 'B001'),
+        correlativoLiquidacion: getCorr(company?.id, company?.serieLiquidacion || 'E001'),
+        correlativoGuiaRemision: getCorr(company?.id, company?.serieGuiaRemision || 'T001'),
+        correlativoGuiaTransporte: getCorr(company?.id, company?.serieGuiaTransporte || 'V001'),
     };
 };
 
@@ -39,6 +47,9 @@ export const SunatSettings: React.FC = () => {
         const series = [
             { key: 'correlativoFactura', serie: activeCompany?.serieFactura || 'F001' },
             { key: 'correlativoBoleta', serie: activeCompany?.serieBoleta || 'B001' },
+            { key: 'correlativoLiquidacion', serie: activeCompany?.serieLiquidacion || 'E001' },
+            { key: 'correlativoGuiaRemision', serie: activeCompany?.serieGuiaRemision || 'T001' },
+            { key: 'correlativoGuiaTransporte', serie: activeCompany?.serieGuiaTransporte || 'V001' },
         ];
         series.forEach(({ key, serie }) => {
             getNextCorrelative(cid, serie)
@@ -158,30 +169,37 @@ export const SunatSettings: React.FC = () => {
 
             // 2. Si es exitoso, guardar en la empresa
             const targetCid = activeCompany?.id || selectedCompanyId;
-            if (targetCid) {
+                if (targetCid) {
                 updateCompany(targetCid, {
                     ruc: formData.ruc,
                     solUser: formData.solUser,
                     solPass: formData.solPass,
+                    sireClientId: formData.sireClientId,
+                    sireClientSecret: formData.sireClientSecret,
                     certBase64: tempCertBase64,
                     certPass: formData.certPass,
                     sunatEnv: formData.sunatEnv as any,
                     businessName: formData.emitterName,
                     serieFactura: formData.serieFactura,
-                    serieBoleta: formData.serieBoleta
+                    serieBoleta: formData.serieBoleta,
+                    serieLiquidacion: formData.serieLiquidacion,
+                    serieGuiaRemision: formData.serieGuiaRemision,
+                    serieGuiaTransporte: formData.serieGuiaTransporte
                 });
             }
 
             // Guardar correlativos en el servidor (fuente compartida por empresa+serie)
             const cid = targetCid || '';
-            if (formData.serieFactura) {
-                setCorrelativoBaseline(cid, formData.serieFactura, Number(formData.correlativoFactura) || 0).catch(() => {});
-                localStorage.setItem(`ff_corr_${cid}_${formData.serieFactura}`, String(formData.correlativoFactura));
-            }
-            if (formData.serieBoleta) {
-                setCorrelativoBaseline(cid, formData.serieBoleta, Number(formData.correlativoBoleta) || 0).catch(() => {});
-                localStorage.setItem(`ff_corr_${cid}_${formData.serieBoleta}`, String(formData.correlativoBoleta));
-            }
+            const saveSerieCorr = (serie: string, corrVal: number) => {
+                if (!serie) return;
+                setCorrelativoBaseline(cid, serie, Number(corrVal) || 0).catch(() => {});
+                localStorage.setItem(`ff_corr_${cid}_${serie}`, String(corrVal));
+            };
+            saveSerieCorr(formData.serieFactura, formData.correlativoFactura);
+            saveSerieCorr(formData.serieBoleta, formData.correlativoBoleta);
+            saveSerieCorr(formData.serieLiquidacion, formData.correlativoLiquidacion);
+            saveSerieCorr(formData.serieGuiaRemision, formData.correlativoGuiaRemision);
+            saveSerieCorr(formData.serieGuiaTransporte, formData.correlativoGuiaTransporte);
             
             setStatus('success');
             showToast('success', 'Configuración SUNAT guardada correctamente');
@@ -284,6 +302,39 @@ export const SunatSettings: React.FC = () => {
                     </div>
                 </div>
 
+                {/* API SIRE OAuth2 Credentials */}
+                <div className="p-5 bg-indigo-50/60 rounded-2xl border border-indigo-100 space-y-4">
+                    <div className="flex items-center gap-2">
+                        <Shield className="w-5 h-5 text-indigo-600" />
+                        <div>
+                            <h4 className="text-sm font-bold text-indigo-900">API SIRE SUNAT (OAuth2)</h4>
+                            <p className="text-xs text-indigo-700">Credenciales obtenidas desde SUNAT SOL &gt; Empresas &gt; Registro de Credenciales de API</p>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-gray-700">Client ID SIRE</label>
+                            <input
+                                type="text"
+                                className="w-full px-3.5 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-gray-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                value={formData.sireClientId}
+                                onChange={(e) => setFormData({ ...formData, sireClientId: e.target.value })}
+                                placeholder="Ej: 1480c5d6-444a-4d7a-8bd8-b570081dcf30"
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-gray-700">Client Secret SIRE</label>
+                            <input
+                                type="password"
+                                className="w-full px-3.5 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-gray-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                value={formData.sireClientSecret}
+                                onChange={(e) => setFormData({ ...formData, sireClientSecret: e.target.value })}
+                                placeholder="••••••••••••••••••••••••"
+                            />
+                        </div>
+                    </div>
+                </div>
+
                 <div className="p-6 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
                     <div className="flex flex-col items-center text-center">
                         <FileCode className="w-10 h-10 text-gray-400 mb-3" />
@@ -318,72 +369,198 @@ export const SunatSettings: React.FC = () => {
 
                 {/* Serie y Correlativo */}
                 <div className="p-6 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-200">
-                    <div className="flex items-center gap-2 mb-4">
+                    <div className="flex items-center gap-2 mb-5">
                         <FileText className="w-5 h-5 text-amber-600" />
                         <h3 className="text-sm font-bold text-amber-800">Serie y Correlativo</h3>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-gray-700">Serie Factura</label>
-                            <input type="text" maxLength={4}
-                                className={`w-full px-4 py-2 border rounded-xl focus:ring-2 focus:ring-amber-500 outline-none text-sm uppercase ${!formData.serieFactura.startsWith('F') || formData.serieFactura.length !== 4 ? 'border-red-400 bg-red-50' : ''}`}
-                                value={formData.serieFactura}
-                                onChange={e => setFormData({ ...formData, serieFactura: e.target.value.toUpperCase() })}
-                                placeholder="F001" />
-                            {!formData.serieFactura.startsWith('F') && <p className="text-[10px] text-red-500 ml-1">Debe empezar con F (ej: F001)</p>}
-                            {formData.serieFactura.length > 0 && formData.serieFactura.length !== 4 && <p className="text-[10px] text-red-500 ml-1">Debe tener exactamente 4 caracteres</p>}
-                            <label className="text-xs font-semibold text-gray-700 mt-2 block">Último Correlativo</label>
-                            <input type="text" inputMode="numeric" maxLength={8}
-                                className="w-full px-4 py-2 border rounded-xl focus:ring-2 focus:ring-amber-500 outline-none text-sm"
-                                value={formData.correlativoFactura > 0 ? String(formData.correlativoFactura) : ''}
-                                onChange={e => {
-                                    const digits = e.target.value.replace(/\D/g, '');
-                                    const prev = formData.correlativoFactura;
-                                    const prevStr = prev > 0 ? String(prev) : '';
-                                    if (digits.length > prevStr.length && digits.startsWith(prevStr)) {
-                                        const added = parseInt(digits.slice(-1), 10);
-                                        const next = prev * 10 + added;
-                                        if (next <= 99999999) setFormData({ ...formData, correlativoFactura: next });
-                                    } else if (digits.length < prevStr.length) {
-                                        setFormData({ ...formData, correlativoFactura: Math.floor(prev / 10) });
-                                    } else if (digits !== prevStr) {
-                                        setFormData({ ...formData, correlativoFactura: digits ? parseInt(digits, 10) : 0 });
-                                    }
-                                }}
-                                placeholder="0" />
-                            <p className="text-[9px] text-gray-400 ml-1">Se guardará como: {String(formData.correlativoFactura > 0 ? formData.correlativoFactura : 0).padStart(8, '0')}</p>
+
+                    <div className="space-y-4">
+                        {/* Factura */}
+                        <div className="bg-white rounded-xl border border-amber-100 overflow-hidden shadow-sm">
+                            <div className="px-4 py-2 bg-blue-50 border-b border-blue-100 flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-lg bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">F</div>
+                                <span className="text-xs font-bold text-blue-800">Factura Electrónica</span>
+                                <span className="text-[10px] font-semibold text-blue-400 ml-auto">Serie F001</span>
+                            </div>
+                            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Serie</label>
+                                    <input type="text" maxLength={4}
+                                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm uppercase font-mono ${!formData.serieFactura.startsWith('F') || formData.serieFactura.length !== 4 ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
+                                        value={formData.serieFactura}
+                                        onChange={e => setFormData({ ...formData, serieFactura: e.target.value.toUpperCase() })}
+                                        placeholder="F001" />
+                                    {!formData.serieFactura.startsWith('F') && <p className="text-[10px] text-red-500">Debe empezar con F</p>}
+                                    {formData.serieFactura.length > 0 && formData.serieFactura.length !== 4 && <p className="text-[10px] text-red-500">Debe tener 4 caracteres</p>}
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Último Correlativo</label>
+                                    <input type="text" inputMode="numeric" maxLength={8}
+                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-mono"
+                                        value={formData.correlativoFactura > 0 ? String(formData.correlativoFactura) : ''}
+                                        onChange={e => {
+                                            const d = e.target.value.replace(/\D/g, '');
+                                            const p = formData.correlativoFactura;
+                                            const ps = p > 0 ? String(p) : '';
+                                            if (d.length > ps.length && d.startsWith(ps)) { const n = p * 10 + parseInt(d.slice(-1), 10); if (n <= 99999999) setFormData({ ...formData, correlativoFactura: n }); }
+                                            else if (d.length < ps.length) setFormData({ ...formData, correlativoFactura: Math.floor(p / 10) });
+                                            else if (d !== ps) setFormData({ ...formData, correlativoFactura: d ? parseInt(d, 10) : 0 });
+                                        }}
+                                        placeholder="0" />
+                                    <p className="text-[9px] text-gray-400 font-mono">= {String(formData.correlativoFactura > 0 ? formData.correlativoFactura : 0).padStart(8, '0')}</p>
+                                </div>
+                            </div>
                         </div>
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-gray-700">Serie Boleta</label>
-                            <input type="text" maxLength={4}
-                                className={`w-full px-4 py-2 border rounded-xl focus:ring-2 focus:ring-amber-500 outline-none text-sm uppercase ${!formData.serieBoleta.startsWith('B') || formData.serieBoleta.length !== 4 ? 'border-red-400 bg-red-50' : ''}`}
-                                value={formData.serieBoleta}
-                                onChange={e => setFormData({ ...formData, serieBoleta: e.target.value.toUpperCase() })}
-                                placeholder="B001" />
-                            {!formData.serieBoleta.startsWith('B') && <p className="text-[10px] text-red-500 ml-1">Debe empezar con B (ej: B001)</p>}
-                            {formData.serieBoleta.length > 0 && formData.serieBoleta.length !== 4 && <p className="text-[10px] text-red-500 ml-1">Debe tener exactamente 4 caracteres</p>}
-                            <label className="text-xs font-semibold text-gray-700 mt-2 block">Último Correlativo</label>
-                            <input type="text" inputMode="numeric" maxLength={8}
-                                className="w-full px-4 py-2 border rounded-xl focus:ring-2 focus:ring-amber-500 outline-none text-sm"
-                                value={formData.correlativoBoleta > 0 ? String(formData.correlativoBoleta) : ''}
-                                onChange={e => {
-                                    const digits = e.target.value.replace(/\D/g, '');
-                                    const prev = formData.correlativoBoleta;
-                                    const prevStr = prev > 0 ? String(prev) : '';
-                                    if (digits.length > prevStr.length && digits.startsWith(prevStr)) {
-                                        const added = parseInt(digits.slice(-1), 10);
-                                        const next = prev * 10 + added;
-                                        if (next <= 99999999) setFormData({ ...formData, correlativoBoleta: next });
-                                    } else if (digits.length < prevStr.length) {
-                                        setFormData({ ...formData, correlativoBoleta: Math.floor(prev / 10) });
-                                    } else if (digits !== prevStr) {
-                                        setFormData({ ...formData, correlativoBoleta: digits ? parseInt(digits, 10) : 0 });
-                                    }
-                                }}
-                                placeholder="0" />
-                            <p className="text-[9px] text-gray-400 ml-1">Se guardará como: {String(formData.correlativoBoleta > 0 ? formData.correlativoBoleta : 0).padStart(8, '0')}</p>
+
+                        {/* Boleta */}
+                        <div className="bg-white rounded-xl border border-amber-100 overflow-hidden shadow-sm">
+                            <div className="px-4 py-2 bg-purple-50 border-b border-purple-100 flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-lg bg-purple-600 text-white text-[10px] font-black flex items-center justify-center">B</div>
+                                <span className="text-xs font-bold text-purple-800">Boleta Electrónica</span>
+                                <span className="text-[10px] font-semibold text-purple-400 ml-auto">Serie B001</span>
+                            </div>
+                            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Serie</label>
+                                    <input type="text" maxLength={4}
+                                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-sm uppercase font-mono ${!formData.serieBoleta.startsWith('B') || formData.serieBoleta.length !== 4 ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
+                                        value={formData.serieBoleta}
+                                        onChange={e => setFormData({ ...formData, serieBoleta: e.target.value.toUpperCase() })}
+                                        placeholder="B001" />
+                                    {!formData.serieBoleta.startsWith('B') && <p className="text-[10px] text-red-500">Debe empezar con B</p>}
+                                    {formData.serieBoleta.length > 0 && formData.serieBoleta.length !== 4 && <p className="text-[10px] text-red-500">Debe tener 4 caracteres</p>}
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Último Correlativo</label>
+                                    <input type="text" inputMode="numeric" maxLength={8}
+                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-sm font-mono"
+                                        value={formData.correlativoBoleta > 0 ? String(formData.correlativoBoleta) : ''}
+                                        onChange={e => {
+                                            const d = e.target.value.replace(/\D/g, '');
+                                            const p = formData.correlativoBoleta;
+                                            const ps = p > 0 ? String(p) : '';
+                                            if (d.length > ps.length && d.startsWith(ps)) { const n = p * 10 + parseInt(d.slice(-1), 10); if (n <= 99999999) setFormData({ ...formData, correlativoBoleta: n }); }
+                                            else if (d.length < ps.length) setFormData({ ...formData, correlativoBoleta: Math.floor(p / 10) });
+                                            else if (d !== ps) setFormData({ ...formData, correlativoBoleta: d ? parseInt(d, 10) : 0 });
+                                        }}
+                                        placeholder="0" />
+                                    <p className="text-[9px] text-gray-400 font-mono">= {String(formData.correlativoBoleta > 0 ? formData.correlativoBoleta : 0).padStart(8, '0')}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Liquidación de Compra */}
+                        <div className="bg-white rounded-xl border border-amber-100 overflow-hidden shadow-sm">
+                            <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-100 flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white text-[10px] font-black flex items-center justify-center">E</div>
+                                <span className="text-xs font-bold text-emerald-800">Liquidación de Compra</span>
+                                <span className="text-[10px] font-semibold text-emerald-400 ml-auto">Serie E001</span>
+                            </div>
+                            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Serie</label>
+                                    <input type="text" maxLength={4}
+                                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm uppercase font-mono ${!formData.serieLiquidacion.startsWith('E') || formData.serieLiquidacion.length !== 4 ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
+                                        value={formData.serieLiquidacion}
+                                        onChange={e => setFormData({ ...formData, serieLiquidacion: e.target.value.toUpperCase() })}
+                                        placeholder="E001" />
+                                    {!formData.serieLiquidacion.startsWith('E') && <p className="text-[10px] text-red-500">Debe empezar con E</p>}
+                                    {formData.serieLiquidacion.length > 0 && formData.serieLiquidacion.length !== 4 && <p className="text-[10px] text-red-500">Debe tener 4 caracteres</p>}
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Último Correlativo</label>
+                                    <input type="text" inputMode="numeric" maxLength={8}
+                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-mono"
+                                        value={formData.correlativoLiquidacion > 0 ? String(formData.correlativoLiquidacion) : ''}
+                                        onChange={e => {
+                                            const d = e.target.value.replace(/\D/g, '');
+                                            const p = formData.correlativoLiquidacion;
+                                            const ps = p > 0 ? String(p) : '';
+                                            if (d.length > ps.length && d.startsWith(ps)) { const n = p * 10 + parseInt(d.slice(-1), 10); if (n <= 99999999) setFormData({ ...formData, correlativoLiquidacion: n }); }
+                                            else if (d.length < ps.length) setFormData({ ...formData, correlativoLiquidacion: Math.floor(p / 10) });
+                                            else if (d !== ps) setFormData({ ...formData, correlativoLiquidacion: d ? parseInt(d, 10) : 0 });
+                                        }}
+                                        placeholder="0" />
+                                    <p className="text-[9px] text-gray-400 font-mono">= {String(formData.correlativoLiquidacion > 0 ? formData.correlativoLiquidacion : 0).padStart(8, '0')}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Guía Remitente */}
+                        <div className="bg-white rounded-xl border border-amber-100 overflow-hidden shadow-sm">
+                            <div className="px-4 py-2 bg-sky-50 border-b border-sky-100 flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-lg bg-sky-600 text-white text-[10px] font-black flex items-center justify-center">T</div>
+                                <span className="text-xs font-bold text-sky-800">Guía de Remisión Electrónica</span>
+                                <span className="text-[10px] font-semibold text-sky-400 ml-auto">Serie T001</span>
+                            </div>
+                            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Serie</label>
+                                    <input type="text" maxLength={4}
+                                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-sky-500 outline-none text-sm uppercase font-mono ${!formData.serieGuiaRemision.startsWith('T') || formData.serieGuiaRemision.length !== 4 ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
+                                        value={formData.serieGuiaRemision}
+                                        onChange={e => setFormData({ ...formData, serieGuiaRemision: e.target.value.toUpperCase() })}
+                                        placeholder="T001" />
+                                    {!formData.serieGuiaRemision.startsWith('T') && <p className="text-[10px] text-red-500">Debe empezar con T</p>}
+                                    {formData.serieGuiaRemision.length > 0 && formData.serieGuiaRemision.length !== 4 && <p className="text-[10px] text-red-500">Debe tener 4 caracteres</p>}
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Último Correlativo</label>
+                                    <input type="text" inputMode="numeric" maxLength={8}
+                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-sky-500 outline-none text-sm font-mono"
+                                        value={formData.correlativoGuiaRemision > 0 ? String(formData.correlativoGuiaRemision) : ''}
+                                        onChange={e => {
+                                            const d = e.target.value.replace(/\D/g, '');
+                                            const p = formData.correlativoGuiaRemision;
+                                            const ps = p > 0 ? String(p) : '';
+                                            if (d.length > ps.length && d.startsWith(ps)) { const n = p * 10 + parseInt(d.slice(-1), 10); if (n <= 99999999) setFormData({ ...formData, correlativoGuiaRemision: n }); }
+                                            else if (d.length < ps.length) setFormData({ ...formData, correlativoGuiaRemision: Math.floor(p / 10) });
+                                            else if (d !== ps) setFormData({ ...formData, correlativoGuiaRemision: d ? parseInt(d, 10) : 0 });
+                                        }}
+                                        placeholder="0" />
+                                    <p className="text-[9px] text-gray-400 font-mono">= {String(formData.correlativoGuiaRemision > 0 ? formData.correlativoGuiaRemision : 0).padStart(8, '0')}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Guía Transportista */}
+                        <div className="bg-white rounded-xl border border-amber-100 overflow-hidden shadow-sm">
+                            <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-lg bg-amber-600 text-white text-[10px] font-black flex items-center justify-center">V</div>
+                                <span className="text-xs font-bold text-amber-800">Guía de Transportista Electrónica</span>
+                                <span className="text-[10px] font-semibold text-amber-500 ml-auto">Serie V001</span>
+                            </div>
+                            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Serie</label>
+                                    <input type="text" maxLength={4}
+                                        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 outline-none text-sm uppercase font-mono ${!formData.serieGuiaTransporte.startsWith('V') || formData.serieGuiaTransporte.length !== 4 ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}
+                                        value={formData.serieGuiaTransporte}
+                                        onChange={e => setFormData({ ...formData, serieGuiaTransporte: e.target.value.toUpperCase() })}
+                                        placeholder="V001" />
+                                    {!formData.serieGuiaTransporte.startsWith('V') && <p className="text-[10px] text-red-500">Debe empezar con V</p>}
+                                    {formData.serieGuiaTransporte.length > 0 && formData.serieGuiaTransporte.length !== 4 && <p className="text-[10px] text-red-500">Debe tener 4 caracteres</p>}
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-gray-500 uppercase">Último Correlativo</label>
+                                    <input type="text" inputMode="numeric" maxLength={8}
+                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 outline-none text-sm font-mono"
+                                        value={formData.correlativoGuiaTransporte > 0 ? String(formData.correlativoGuiaTransporte) : ''}
+                                        onChange={e => {
+                                            const d = e.target.value.replace(/\D/g, '');
+                                            const p = formData.correlativoGuiaTransporte;
+                                            const ps = p > 0 ? String(p) : '';
+                                            if (d.length > ps.length && d.startsWith(ps)) { const n = p * 10 + parseInt(d.slice(-1), 10); if (n <= 99999999) setFormData({ ...formData, correlativoGuiaTransporte: n }); }
+                                            else if (d.length < ps.length) setFormData({ ...formData, correlativoGuiaTransporte: Math.floor(p / 10) });
+                                            else if (d !== ps) setFormData({ ...formData, correlativoGuiaTransporte: d ? parseInt(d, 10) : 0 });
+                                        }}
+                                        placeholder="0" />
+                                    <p className="text-[9px] text-gray-400 font-mono">= {String(formData.correlativoGuiaTransporte > 0 ? formData.correlativoGuiaTransporte : 0).padStart(8, '0')}</p>
+                                </div>
+                            </div>
                         </div>
                     </div>
+
                     <p className="text-[10px] text-gray-400 mt-3 ml-1">El correlativo se auto-incrementa al emitir. Puedes ajustarlo manualmente aquí. Poner 0 reinicia desde 1.</p>
                 </div>
 

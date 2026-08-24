@@ -3,7 +3,7 @@ import { useStore } from '../context/StoreContext';
 import { consultaService } from '../services/consultaService';
 import { sunatService } from '../services/sunatService';
 import { getNextCorrelative, allocateNextCorrelative } from '../src/services/api';
-import { InvoiceItem } from '../types';
+import { InvoiceItem, PendingInvoice } from '../types';
 import { 
   X, User, Search, Loader2, FileText, Calendar, DollarSign, 
   CheckCircle2, AlertTriangle, Plus, Trash2, Eye, ArrowLeft, 
@@ -32,7 +32,7 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
   onClose,
   onSuccess,
 }) => {
-  const { currentUser, selectedCompany, selectedCompanyId, sunatGlobalConfig, addTaxDocument } = useStore();
+  const { currentUser, selectedCompany, selectedCompanyId, sunatGlobalConfig, addTaxDocument, addPendingInvoice } = useStore();
 
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
@@ -46,7 +46,7 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
   const [reniecError, setReniecError] = useState('');
 
   // Series & Correlative
-  const [serie, setSerie] = useState('E001');
+  const [serie, setSerie] = useState(selectedCompany?.serieLiquidacion || 'E001');
   const [correlative, setCorrelative] = useState<number | ''>('');
   const [issueDate, setIssueDate] = useState(new Date().toISOString().split('T')[0]);
   const [currency, setCurrency] = useState<'PEN' | 'USD'>('PEN');
@@ -89,6 +89,49 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
       setCorrelative(1);
     }
   }, [selectedCompanyId, serie]);
+
+  const subtotal = useMemo(() => {
+    return items.reduce((acc, it) => acc + (it.total || 0), 0);
+  }, [items]);
+
+  const igv = useMemo(() => {
+    return includeIgv ? Math.round(subtotal * 0.18 * 100) / 100 : 0;
+  }, [subtotal, includeIgv]);
+
+  const grossTotal = useMemo(() => {
+    return subtotal + igv;
+  }, [subtotal, igv]);
+
+  const retentionAmount = useMemo(() => {
+    return Math.round(grossTotal * (retentionRate / 100) * 100) / 100;
+  }, [grossTotal, retentionRate]);
+
+  const netTotalToPay = useMemo(() => {
+    return Math.round((grossTotal - retentionAmount) * 100) / 100;
+  }, [grossTotal, retentionAmount]);
+
+  const isStepValid = useMemo(() => {
+    switch (step) {
+      case 1:
+        return (
+          sellerDocNumber.trim() !== '' &&
+          sellerName.trim() !== '' &&
+          purchaseLocation.trim() !== ''
+        );
+      case 2:
+        return items.every(
+          item =>
+            item.description.trim() !== '' &&
+            item.unit !== '' &&
+            item.quantity > 0 &&
+            item.unitPrice > 0
+        );
+      case 3:
+        return retentionRate >= 0;
+      default:
+        return true;
+    }
+  }, [step, sellerDocNumber, sellerName, purchaseLocation, items, retentionRate]);
 
   if (!isOpen) return null;
 
@@ -140,27 +183,6 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
     });
   };
 
-  // Calculations
-  const subtotal = useMemo(() => {
-    return items.reduce((acc, it) => acc + (it.total || 0), 0);
-  }, [items]);
-
-  const igv = useMemo(() => {
-    return includeIgv ? Math.round(subtotal * 0.18 * 100) / 100 : 0;
-  }, [subtotal, includeIgv]);
-
-  const grossTotal = useMemo(() => {
-    return subtotal + igv;
-  }, [subtotal, igv]);
-
-  const retentionAmount = useMemo(() => {
-    return Math.round(grossTotal * (retentionRate / 100) * 100) / 100;
-  }, [grossTotal, retentionRate]);
-
-  const netTotalToPay = useMemo(() => {
-    return Math.round((grossTotal - retentionAmount) * 100) / 100;
-  }, [grossTotal, retentionAmount]);
-
   // Preview Data Format
   const previewData: InvoicePreviewData = {
     serieNumero: `${serie}-${String(correlative || 1).padStart(8, '0')}`,
@@ -184,8 +206,12 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
   // Emit Liquidación de Compra
   const handleEmit = async () => {
     setEmissionError('');
-    if (!sellerName.trim() || !sellerDocNumber.trim()) {
-      setEmissionError('Debes completar el número de documento y nombres del vendedor.');
+    if (!sellerName.trim() || !sellerDocNumber.trim() || !purchaseLocation.trim()) {
+      setEmissionError('Debes completar el número de documento, nombres del vendedor y lugar de compra.');
+      return;
+    }
+    if (items.some(item => !item.description.trim() || item.quantity <= 0 || item.unitPrice <= 0)) {
+      setEmissionError('Todos los ítems deben tener descripción, cantidad y precio unitario válidos.');
       return;
     }
 
@@ -202,9 +228,10 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
 
       const formattedId = `${serie}-${String(finalCorr).padStart(8, '0')}`;
       const token = selectedCompany?.sunatToken || sunatGlobalConfig.sunatToken || '';
-      const apiUrl = selectedCompany?.sunatApiUrl || sunatGlobalConfig.sunatApiUrl || 'https://sandbox.apisunat.pe/api/v3';
+      const apiUrl = '';
 
       const payload = {
+        documentId: formattedId,
         recipientDocType: sellerDocType,
         recipientDocNumber: sellerDocNumber,
         recipientName: sellerName,
@@ -220,8 +247,61 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
       };
 
       const resp = await sunatService.emitirLiquidacionCompra(payload, token, apiUrl, {
+        ruc: selectedCompany?.ruc || currentUser?.ruc,
+        user: selectedCompany?.solUser,
+        pass: selectedCompany?.solPass,
+        env: selectedCompany?.sunatEnv || 'PRODUCTION',
+        certBase64: selectedCompany?.certBase64,
+        certPass: selectedCompany?.certPass,
         emitterName: selectedCompany?.businessName || selectedCompany?.name || currentUser?.name
       }, serie, currency);
+
+      const buildPendingLiquidacion = (errorMsg: string): PendingInvoice => ({
+        id: formattedId,
+        userId: currentUser?.id || '',
+        companyId: selectedCompanyId || '',
+        serie,
+        correlative: Number(finalCorr) || 1,
+        documentType: 'liquidacion_compra',
+        payload: {
+          invoiceData: {
+            id: formattedId,
+            issueDate,
+            customerRuc: sellerDocNumber,
+            customerName: sellerName,
+            customerType: sellerDocType,
+            purchaseLocation,
+            items,
+            subtotal,
+            igv,
+            retentionRate,
+            retentionAmount,
+            total: grossTotal,
+            netTotal: netTotalToPay,
+            currency: currency || 'PEN',
+            documentType: '04'
+          },
+          credentials: {
+            ruc: selectedCompany?.ruc || currentUser?.ruc,
+            user: selectedCompany?.solUser,
+            pass: selectedCompany?.solPass,
+            env: selectedCompany?.sunatEnv || 'PRODUCTION',
+            certBase64: selectedCompany?.certBase64,
+            certPass: selectedCompany?.certPass,
+            emitterName: selectedCompany?.businessName || selectedCompany?.name || currentUser?.name
+          }
+        },
+        customerDocType: sellerDocType === '1' ? 'DNI' : 'RUC',
+        customerDocNumber: sellerDocNumber,
+        customerName: sellerName,
+        customerPhone: sellerPhone,
+        amount: netTotalToPay,
+        createdAt: issueDate,
+        lastAttempt: new Date().toISOString().split('T')[0],
+        attemptCount: 0,
+        status: 'PENDIENTE',
+        lastError: errorMsg
+      });
 
       if (resp.success) {
         const newDoc = {
@@ -236,7 +316,7 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
           periodMonth: new Date(issueDate).toLocaleString('es-ES', { month: 'long' }),
           periodYear: new Date(issueDate).getFullYear(),
           sunatStatus: (resp.sunatStatus || 'ACEPTADO') as any,
-          documentType: 'factura' as any, // Stored in tax_documents
+          documentType: 'liquidacion_compra' as any,
           uploadedBy: 'USER' as const,
           xmlContent: resp.xmlContent,
           cdrBase64: resp.cdrBase64,
@@ -257,10 +337,18 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
         setStep(4);
         if (onSuccess) onSuccess(newDoc);
       } else {
-        setEmissionError(resp.error || 'Error al emitir Liquidación de Compra a SUNAT.');
+        const errMsg = resp.error || 'Error al emitir Liquidación de Compra a SUNAT.';
+        addPendingInvoice(buildPendingLiquidacion(errMsg));
+        setEmissionError(`${errMsg} Se guardó en "Pendientes SUNAT" para reintento automático.`);
       }
     } catch (err: any) {
-      setEmissionError('Error inesperado: ' + err.message);
+      const errMsg = 'Error inesperado: ' + (err.message || 'Desconocido');
+      if (typeof formattedId !== 'undefined') {
+        try {
+          addPendingInvoice(buildPendingLiquidacion(errMsg));
+        } catch {}
+      }
+      setEmissionError(`${errMsg}. Se guardó en "Pendientes SUNAT" para reintento automático.`);
     } finally {
       setIsEmitting(false);
     }
@@ -409,18 +497,24 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
               <button onClick={onClose} className="px-5 py-3 text-xs font-black uppercase text-gray-500 hover:bg-gray-100 rounded-2xl">
                 Cancelar
               </button>
-              <button
-                onClick={() => {
-                  if (!sellerDocNumber.trim() || !sellerName.trim()) {
-                    setReniecError('Ingresa el número de documento y los nombres del vendedor.');
-                    return;
-                  }
-                  setStep(2);
-                }}
-                className="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white text-xs font-black uppercase tracking-wider rounded-2xl transition shadow-md flex items-center gap-1"
-              >
-                <span>Siguiente: Productos</span> <ChevronRight className="w-4 h-4" />
-              </button>
+              <div className="flex flex-col items-end gap-1.5">
+                {!isStepValid && (
+                  <p className="text-[10px] text-amber-600 font-bold">Complete todos los campos obligatorios (*)</p>
+                )}
+                <button
+                  disabled={!isStepValid}
+                  onClick={() => {
+                    if (!sellerDocNumber.trim() || !sellerName.trim() || !purchaseLocation.trim()) {
+                      setReniecError('Ingresa el número de documento, nombres del vendedor y lugar de compra.');
+                      return;
+                    }
+                    setStep(2);
+                  }}
+                  className="px-6 py-3 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-black uppercase tracking-wider rounded-2xl transition shadow-md flex items-center gap-1"
+                >
+                  <span>Siguiente: Productos</span> <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -509,12 +603,18 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
               <button onClick={() => setStep(1)} className="px-5 py-3 text-xs font-black uppercase text-gray-500 hover:bg-gray-100 rounded-2xl flex items-center gap-1">
                 <ChevronLeft className="w-4 h-4" /> Anterior
               </button>
-              <button
-                onClick={() => setStep(3)}
-                className="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white text-xs font-black uppercase tracking-wider rounded-2xl transition shadow-md flex items-center gap-1"
-              >
-                <span>Siguiente: Impuestos</span> <ChevronRight className="w-4 h-4" />
-              </button>
+              <div className="flex flex-col items-end gap-1.5">
+                {!isStepValid && (
+                  <p className="text-[10px] text-amber-600 font-bold">Todos los ítems deben tener descripción, unidad, cantidad y precio válidos</p>
+                )}
+                <button
+                  disabled={!isStepValid}
+                  onClick={() => setStep(3)}
+                  className="px-6 py-3 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-black uppercase tracking-wider rounded-2xl transition shadow-md flex items-center gap-1"
+                >
+                  <span>Siguiente: Impuestos</span> <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -584,21 +684,26 @@ export const LiquidacionCompraWizard: React.FC<LiquidacionCompraWizardProps> = (
                 <ChevronLeft className="w-4 h-4" /> Anterior
               </button>
               
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
                 <button
                   onClick={() => setShowPreviewModal(true)}
                   className="px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs font-black uppercase tracking-wider rounded-2xl transition flex items-center gap-1.5"
                 >
                   <Eye className="w-4 h-4" /> Vista Previa PDF
                 </button>
-                <button
-                  onClick={handleEmit}
-                  disabled={isEmitting}
-                  className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-black uppercase tracking-wider rounded-2xl transition shadow-md flex items-center gap-2"
-                >
-                  {isEmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
-                  <span>Emitir a SUNAT ({serie})</span>
-                </button>
+                <div className="flex flex-col items-end gap-1.5">
+                  {!isStepValid && (
+                    <p className="text-[10px] text-amber-600 font-bold">Complete todos los campos obligatorios (*)</p>
+                  )}
+                  <button
+                    onClick={handleEmit}
+                    disabled={isEmitting || !isStepValid}
+                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-black uppercase tracking-wider rounded-2xl transition shadow-md flex items-center gap-2"
+                  >
+                    {isEmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                    <span>Emitir a SUNAT ({serie})</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

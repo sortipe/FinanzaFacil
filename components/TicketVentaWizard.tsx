@@ -63,8 +63,6 @@ export const TicketVentaWizard: React.FC<TicketVentaWizardProps> = ({
     return () => { isMounted = false; };
   }, [isOpen, selectedCompanyId, serie]);
 
-  if (!isOpen) return null;
-
   // Total calculation
   const total = useMemo(() => {
     return items.reduce((acc, item) => acc + (parseFloat(item.subtotal as any) || 0), 0);
@@ -75,6 +73,8 @@ export const TicketVentaWizard: React.FC<TicketVentaWizardProps> = ({
     const received = parseFloat(amountReceived) || 0;
     return received > total ? received - total : 0;
   }, [amountReceived, total]);
+
+  if (!isOpen) return null;
 
   // Preset Public Customer
   const handleSetPublicCustomer = () => {

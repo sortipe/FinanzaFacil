@@ -204,8 +204,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           localStorage.setItem('ff_current_user', JSON.stringify(updated));
           return updated;
         });
-        setExpenses(e);
-        setTaxDocuments(td);
+        // Merge local expenses that may not be on the server yet (offline / pending sync recovery)
+        const localExpenses: Expense[] = loadFromLS('ff_expenses', []);
+        const serverExpenseIds = new Set((Array.isArray(e) ? e : []).map((item: Expense) => item.id));
+        const unsyncedExpenses = localExpenses.filter((item: Expense) => item && item.id && !serverExpenseIds.has(item.id));
+        const mergedExpenses = [...(Array.isArray(e) ? e : []), ...unsyncedExpenses];
+        setExpenses(mergedExpenses);
+
+        if (unsyncedExpenses.length > 0) {
+          api.createBatchExpenses(unsyncedExpenses).catch(err => console.warn('Could not sync local expenses to server:', err));
+        }
+
+        // Merge local tax documents if any were not yet synced
+        const localDocs: TaxDocument[] = loadFromLS('ff_tax_docs', []);
+        const serverDocIds = new Set((Array.isArray(td) ? td : []).map((item: TaxDocument) => item.id));
+        const unsyncedDocs = localDocs.filter((item: TaxDocument) => item && item.id && !serverDocIds.has(item.id));
+        const mergedDocs = [...(Array.isArray(td) ? td : []), ...unsyncedDocs];
+        setTaxDocuments(mergedDocs);
         setPackages(ensureFreePackage(pkg, DEFAULT_FREE_CLIENT_PACKAGE));
         setAccountantPackages(ensureFreePackage(apkg, DEFAULT_FREE_ACCOUNTANT_PACKAGE));
         setPaymentMethods(pm);
@@ -577,13 +592,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const updateUserStatus = (userId: string, status: SubscriptionStatus) => updateUser(userId, { subscriptionStatus: status });
 
   const addExpense = (expense: Expense) => {
-    api.createExpense(expense).catch(() => {});
-    setExpenses(prev => [...prev, expense]);
+    setExpenses(prev => [expense, ...prev.filter(x => x.id !== expense.id)]);
+    api.createExpense(expense).catch(err => {
+      console.warn('Error saving expense to server, retained locally:', err);
+    });
   };
 
   const addBatchExpenses = (expenseList: Expense[]) => {
-    api.createBatchExpenses(expenseList).catch(() => {});
-    setExpenses(prev => [...expenseList, ...prev]);
+    const incomingIds = new Set(expenseList.map(x => x.id));
+    setExpenses(prev => [...expenseList, ...prev.filter(x => !incomingIds.has(x.id))]);
+    api.createBatchExpenses(expenseList).catch(err => {
+      console.warn('Error saving batch expenses to server, retained locally:', err);
+    });
   };
 
   const addTaxDocument = (doc: TaxDocument) => {
@@ -806,8 +826,9 @@ const updateAccountantPackage = (id: string, details: Partial<SubscriptionPackag
     setPendingInvoices(prev => prev.map(p => {
       if (p.id !== id) return p;
       const newAttempts = status === 'PENDIENTE' ? (p.attemptCount || 0) + 1 : p.attemptCount;
-      const updated = { ...p, status, lastAttempt: new Date().toISOString().split('T')[0], attemptCount: newAttempts, lastError };
-      api.updatePendingInvoice(id, { status, lastAttempt: updated.lastAttempt, attemptCount: newAttempts, lastError }).catch(() => {});
+      const lastAttemptAt = new Date().toISOString();
+      const updated = { ...p, status, lastAttempt: lastAttemptAt.split('T')[0], lastAttemptAt, attemptCount: newAttempts, lastError };
+      api.updatePendingInvoice(id, { status, lastAttempt: updated.lastAttempt, lastAttemptAt, attemptCount: newAttempts, lastError }).catch(() => {});
       return updated;
     }));
   };
@@ -895,6 +916,30 @@ const updateAccountantPackage = (id: string, details: Partial<SubscriptionPackag
       console.error('Error refreshing store:', err);
     }
   };
+
+  // Refresco ligero de pendientes SUNAT: el worker del servidor puede emitirlos o
+  // borrarlos en cualquier momento; así la UI refleja esos cambios sin recargar.
+  useEffect(() => {
+    if (!currentUser) return;
+    const refreshPendings = async () => {
+      try {
+        const accessibleCompanyIds = companies
+          .filter(c =>
+            c.ownerUserId === currentUser.id ||
+            c.assignedAccountantId === currentUser.id ||
+            (currentUser.parentId && c.ownerUserId === currentUser.parentId)
+          )
+          .map(c => c.id)
+          .filter(Boolean);
+        const companyQuery = accessibleCompanyIds.length ? accessibleCompanyIds.join(',') : undefined;
+        const pi = await api.fetchPendingInvoices(undefined, companyQuery).catch(() => null);
+        if (pi) setPendingInvoices(pi);
+      } catch {}
+    };
+    const iv = setInterval(refreshPendings, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [currentUser?.id, companies]);
+
 
   return (
     <StoreContext.Provider value={{

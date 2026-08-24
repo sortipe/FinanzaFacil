@@ -11,7 +11,7 @@ import { parseUploadName, derivePeriod, readFileAsBase64 } from '../utils/upload
 import {
   User as UserIcon, Users, ArrowLeft, ImageIcon, X, ShieldCheck, FileText,
   Tag, Clock, Hash, DollarSign, Lock, Upload, Trash2, FileUp, PlusCircle,
-  Calendar, UserPlus, Building, MapPin, CreditCard, Download, FileSpreadsheet,
+  Calendar, UserPlus, Building, MapPin, CreditCard, Download, DownloadCloud, FileSpreadsheet,
    Eye, Search, Loader2, AlertTriangle, CheckCircle2, BarChart3, ReceiptText,
    TrendingUp, TrendingDown, Printer, Filter, CalendarDays, Sparkles, History,
    FileInput, RefreshCw, FolderTree
@@ -328,7 +328,21 @@ export const AccountantDashboard: React.FC = () => {
         removePendingInvoice(inv.id);
         const paddedCorr = typeof inv.correlative === 'number' ? String(inv.correlative).padStart(8, '0') : '00000001';
         const isNCND = inv.documentType === 'nota_credito' || inv.documentType === 'nota_debito';
-        const docName = isNCND ? `${inv.documentType === 'nota_credito' ? 'N. Crédito' : 'N. Débito'} ${inv.serie}-${paddedCorr}` : `${inv.serie}-${paddedCorr}`;
+        const isLiq = inv.documentType === 'liquidacion_compra';
+        const isGuiaRem = inv.documentType === 'guia_remision';
+        const isGuiaTransp = inv.documentType === 'guia_transportista';
+
+        let docName = `${inv.serie}-${paddedCorr}`;
+        if (inv.documentType === 'nota_credito') docName = `N. Crédito ${inv.serie}-${paddedCorr}`;
+        else if (inv.documentType === 'nota_debito') docName = `N. Débito ${inv.serie}-${paddedCorr}`;
+        else if (isLiq) docName = `Liquidación de Compra ${inv.serie}-${paddedCorr} - ${inv.customerName || ''}`;
+        else if (isGuiaRem) docName = `Guía de Remisión ${inv.serie}-${paddedCorr} - ${inv.customerName || ''}`;
+        else if (isGuiaTransp) docName = `Guía Transportista ${inv.serie}-${paddedCorr} - ${inv.customerName || ''}`;
+
+        const resolvedDocType: TaxDocument['documentType'] = isNCND || isLiq || isGuiaRem || isGuiaTransp
+          ? inv.documentType
+          : (inv.documentType === 'boleta' ? 'boleta' : 'factura');
+
         const newDoc: TaxDocument = {
           id: inv.id,
           userId: inv.userId,
@@ -347,9 +361,17 @@ export const AccountantDashboard: React.FC = () => {
           periodYear: new Date().getFullYear(),
           sunatStatus: 'SENT',
           sunatHash: Array.from({length: 16}, () => Math.floor(Math.random()*16).toString(16)).join(''),
-          documentType: isNCND ? inv.documentType : undefined,
+          documentType: resolvedDocType,
           originalDocumentId: inv.originalDocumentId,
-          uploadedBy: 'ACCOUNTANT'
+          uploadedBy: 'ACCOUNTANT',
+          metadata: {
+            recipientName: inv.customerName,
+            recipientRuc: inv.customerDocNumber,
+            recipientPhone: inv.customerPhone,
+            amount: inv.amount,
+            netAmount: inv.amount,
+            date: inv.createdAt || new Date().toISOString().split('T')[0]
+          }
         };
         addTaxDocument(newDoc);
         if (clientUser) {
@@ -395,21 +417,8 @@ export const AccountantDashboard: React.FC = () => {
     }
   };
 
-  // Auto-reintento cada 30s de pendientes de empresas del contador
-  useEffect(() => {
-    const companyIds = myCompanies.map(c => c.id);
-    const pending = pendingInvoices.filter(p =>
-      (p.status === 'PENDIENTE') && (p.attemptCount || 0) < getMaxRetryAttempts() &&
-      p.companyId && companyIds.includes(p.companyId)
-    );
-    if (pending.length === 0) return;
-    const timer = setTimeout(() => {
-      pending.forEach(inv => {
-        if (inv.id !== retryingInvoice) retryPendingInvoice(inv);
-      });
-    }, 30000);
-    return () => clearTimeout(timer);
-  }, [pendingInvoices, myCompanies]);
+  // El reintento automático ahora vive en el servidor (server/retry-worker.js),
+  // que cubre TODAS las empresas sin depender de sesiones abiertas.
 
   // ─── Clientes: obtener resumen del mes actual ───
   const getCompanyMonthStats = (companyId: string) => {
@@ -434,7 +443,10 @@ export const AccountantDashboard: React.FC = () => {
       cantDocs: docs.length,
       cantGastos: monthExpenses.length,
       ultimoMovimiento: monthExpenses.length > 0
-        ? monthExpenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0].date
+        ? monthExpenses.sort((a, b) => {
+            const diff = new Date(b.date).getTime() - new Date(a.date).getTime();
+            return diff !== 0 ? diff : b.id.localeCompare(a.id);
+          })[0].date
         : null
     };
   };
@@ -747,13 +759,19 @@ export const AccountantDashboard: React.FC = () => {
         if (matchingDoc && matchingDoc.sunatStatus === 'INTERNO') return false;
         return e.date.startsWith(`${movFilterYear}-${String(MONTHS.indexOf(movFilterMonth) + 1).padStart(2, '0')}`);
       })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      .sort((a, b) => {
+        const diff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        return diff !== 0 ? diff : b.id.localeCompare(a.id);
+      });
 
     const clientDocs = taxDocuments
       .filter(d => (d.userId === selectedClientId || (clientCompany?.id && d.companyId === clientCompany.id)) && d.sunatStatus !== 'INTERNO' &&
         (d.uploadDate?.startsWith(`${movFilterYear}-${String(MONTHS.indexOf(movFilterMonth) + 1).padStart(2, '0')}`) ||
          (d.periodYear === movFilterYear && d.periodMonth.toLowerCase() === movFilterMonth.toLowerCase())))
-      .sort((a, b) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime());
+      .sort((a, b) => {
+        const diff = new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime();
+        return diff !== 0 ? diff : b.id.localeCompare(a.id);
+      });
 
     const totals = filteredExpenses.reduce((acc, exp) => {
       const sub = exp.subtotal || (exp.amount / 1.18);
@@ -1070,16 +1088,38 @@ export const AccountantDashboard: React.FC = () => {
               </div>
             </div>
           </div>
-          {previewDoc.fileUrl && (
-            <div className="p-6 border-t flex justify-center bg-gray-50">
+          <div className="p-6 border-t flex flex-wrap gap-3 justify-center items-center bg-gray-50">
+            {previewDoc.fileUrl && (
               <button
                 onClick={() => downloadFile(previewDoc.fileUrl, previewDoc.name, previewDoc.mimeType || 'application/octet-stream', true)}
-                className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-blue-700 transition flex items-center justify-center"
+                className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-blue-700 transition flex items-center justify-center cursor-pointer"
               >
                 <Download className="w-4 h-4 mr-2"/> Descargar Archivo
               </button>
-            </div>
-          )}
+            )}
+            {previewDoc.pdfUrl && (
+              <a href={previewDoc.pdfUrl} target="_blank" rel="noopener noreferrer" className="px-6 py-3 bg-rose-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:bg-rose-700 transition flex items-center justify-center cursor-pointer">
+                <Download className="w-4 h-4 mr-2"/> Descargar PDF
+              </a>
+            )}
+            {(previewDoc.xmlUrl || previewDoc.xmlContent) && (
+              <button 
+                onClick={() => downloadFile(previewDoc.xmlContent || '', `${previewDoc.name}.xml`, 'text/xml')}
+                className="px-6 py-3 bg-white border-2 border-brand-200 text-brand-700 rounded-2xl font-black text-[10px] uppercase hover:bg-brand-50 transition flex items-center justify-center cursor-pointer"
+              >
+                <DownloadCloud className="w-4 h-4 mr-2"/> XML
+              </button>
+            )}
+            {(previewDoc.cdrUrl || previewDoc.cdrBase64) && (
+              <button 
+                onClick={() => downloadFile(previewDoc.cdrBase64 || '', `R-${previewDoc.name}.zip`, 'application/zip', true)}
+                className="px-6 py-3 bg-white border-2 border-emerald-200 text-emerald-700 rounded-2xl font-black text-[10px] uppercase hover:bg-emerald-50 transition flex items-center justify-center cursor-pointer"
+              >
+                <DownloadCloud className="w-4 h-4 mr-2"/> CDR
+              </button>
+            )}
+            <button onClick={() => setPreviewDoc(null)} className="px-6 py-3 bg-white border-2 border-gray-200 text-gray-600 rounded-2xl font-black text-[10px] uppercase hover:bg-gray-100 transition cursor-pointer">Cerrar</button>
+          </div>
         </div>
       </div>
     );
@@ -1487,7 +1527,10 @@ export const AccountantDashboard: React.FC = () => {
     if (!clientCompany) return [];
     return taxDocuments
       .filter(d => (d.userId === clientCompany.ownerUserId || d.accountantId === currentUser?.id) && d.companyId === clientCompany.id)
-      .sort((a, b) => new Date(b.uploadDate || '').getTime() - new Date(a.uploadDate || '').getTime());
+      .sort((a, b) => {
+        const diff = new Date(b.uploadDate || '').getTime() - new Date(a.uploadDate || '').getTime();
+        return diff !== 0 ? diff : b.id.localeCompare(a.id);
+      });
    }, [clientCompany, taxDocuments]);
 
    const companyPendingInvoices = useMemo(() => {
@@ -1501,6 +1544,9 @@ export const AccountantDashboard: React.FC = () => {
        case 'boleta': return 'Boleta';
        case 'nota_credito': return 'Nota de Crédito';
        case 'nota_debito': return 'Nota de Débito';
+       case 'liquidacion_compra': return 'Liquidación de Compra';
+       case 'guia_remision': return 'Guía Remitente';
+       case 'guia_transportista': return 'Guía Transportista';
        default: return t || 'Documento';
      }
     };
@@ -1621,8 +1667,8 @@ export const AccountantDashboard: React.FC = () => {
               {companyPendingInvoices.map(inv => (
                 <div key={inv.id} className="p-3 bg-gray-50 rounded-xl flex justify-between items-center">
                   <div>
-                    <p className="font-black text-sm text-gray-800 uppercase">{inv.documentType === 'factura' ? 'FACTURA' : inv.documentType === 'boleta' ? 'BOLETA' : inv.documentType}</p>
-                    <p className="text-xs text-gray-500 font-bold">{formatDocType(inv.documentType)} {inv.serie}-{typeof inv.correlative === 'number' ? String(inv.correlative).padStart(8, '0') : ''}</p>
+                    <p className="font-black text-sm text-gray-800 uppercase">{formatDocType(inv.documentType).toUpperCase()}</p>
+                    <p className="text-xs text-gray-500 font-bold">{inv.serie}-{typeof inv.correlative === 'number' ? String(inv.correlative).padStart(8, '0') : ''} · {inv.customerName}</p>
                     {inv.lastError && <p className="text-[10px] text-red-600 truncate max-w-md">{inv.lastError}</p>}
                   </div>
                   <button onClick={() => retryPendingInvoice(inv)} disabled={retryingInvoice === inv.id || (inv.attemptCount || 0) >= getMaxRetryAttempts()}
